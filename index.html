@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>mapLibre Wrapper Example</title>
+  <script src="ml5.js"></script>
+  <script src="ml5line.js"></script>
+  <script src="ml5icon.js"></script>
+  <script src="ml5content.js"></script>
+</head>
+<body>
+<div id="map" style="width: 100%; height: 100vh"></div>
+
+<script>
+  (async () => {
+    // init
+    const map = await createMap(document.getElementById("map"), {
+      tile: "https://tiles.openfreemap.org/styles/bright",
+    });
+    
+    // line
+    const { lineAdd, lineUpdate } = createLineLayer(map);
+    
+    lineAdd("track-001", { color: "#F97316", width: 3 });
+    lineUpdate("track-001", [
+      [130.2, 36.5],
+      [130.6, 35.3],
+      [131.0, 35.8],
+    ]);
+    
+    // icon
+    const { iconImgAdd, iconUpdate } = createIconLayer(map);
+    
+    const fishingSvg = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+            <path d="M16 2 L24 28 L16 22 L8 28 Z"
+              fill="#F97316" stroke="#C2410C" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+        `;
+    
+    const bulkSvg = `
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+            <path d="M16 2 L30 28 L16 21 L2 28 Z"
+              fill="#2563EB" stroke="#1D4ED8" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+        `;
+    
+    // icon image listup
+    await Promise.all([
+      iconImgAdd("fishingShip", fishingSvg, { size: 16 }),
+      iconImgAdd("bulkShip", bulkSvg, { size: 20 }),
+    ]);
+    
+    // icon on map
+    iconUpdate("fishingShip", [
+      ["mmsi-001", [130.2, 36.5]],
+      ["mmsi-002", [131.0, 35.8]],
+      ["mmsi-003", [130.6, 35.3]],
+    ]);
+    
+    iconUpdate("bulkShip", [
+      ["mmsi-101", [129.8, 36.0]],
+      ["mmsi-102", [131.3, 36.8]],
+    ]);
+    
+    // popup
+    const { popupUpdate, popupRemove } = createPopupLayer(map);
+    
+    const popupId = "popup-01";
+    const sampleName = "샘플 팝업";
+    const el = document.createElement("div");
+    el.innerHTML = `<header><span>${sampleName}</span><button class="x">✕</button></header>
+          <section>Hello</section>
+        `;
+    el.querySelector(".x").addEventListener("click", () =>
+      popupRemove(popupId),
+    );
+    popupUpdate(popupId, el, [131.3, 36.8]);
+    
+    map.getContainer().addEventListener("icon-click", (e) => {
+      const { icon, id, lngLat } = e.detail;
+      const el = document.createElement("div");
+      el.innerHTML = `<b>${icon}</b> / ${id} <button class="x">✕</button>`;
+      el.querySelector(".x").addEventListener("click", () =>
+        popupRemove(id),
+      );
+      popupUpdate(id, el, lngLat);
+    });
+  })().catch((err) => console.error("[mapLibre]", err));
+</script>
+</body>
+</html>
