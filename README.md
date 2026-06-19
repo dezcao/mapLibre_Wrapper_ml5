@@ -118,8 +118,11 @@
 지도를 초기화하고 `load` 완료 후 MapLibre `Map` 인스턴스를 반환한다.
 
 - `container` — 지도를 렌더링할 DOM 요소
-- `opts.center` — `'경도,위도,줌'` 문자열 (기본 `'128,35,5'`)
+- `opts.center` — `'경도,위도,줌'` 문자열 (기본 `'128,35,5'`). 값이 비었거나 숫자가 아니면 각 항목이 기본값(경도 `128`, 위도 `35`, 줌 `5`)으로 대체된다.
 - `opts.tile` — 프리셋 키(`'dark'` | `'liberty'`) 또는 스타일 JSON URL (기본 `'liberty'`)
+
+> 타일·글리프·스프라이트 로드 실패 같은 **비치명적 오류**는 지도 생성을 막지 않고 콘솔 경고만 남긴다.
+> 스타일 문서 자체를 불러오지 못하는 **치명적 오류**일 때만 Promise가 reject된다.
 
 ### `createLineLayer(map) → { lineAdd, lineUpdate, lineRemove, destroy }`
 
@@ -136,11 +139,14 @@
 
 | 메서드 | 설명 |
 | --- | --- |
-| `iconImgAdd(iconId, code, opts?)` | 아이콘 이미지를 등록(async). `code`에 `<svg`가 있으면 SVG를 캔버스로 래스터라이즈하고, 그 외에는 이미지 URL로 간주해 `fetch`로 받는다. `opts.size` 기본 `32`(DPR 자동 적용). |
+| `iconImgAdd(iconId, code, opts?)` | 아이콘 이미지를 등록(async). `code`에 `<svg`가 있으면 SVG를 캔버스로 래스터라이즈하고, 그 외에는 이미지 URL로 간주해 `fetch`로 받는다. `opts.size` 기본 `32`(SVG·URL 모두 적용, DPR 자동 반영). |
 | `iconImgRemove(iconId)` | 등록한 이미지와 해당 아이콘의 모든 포인트 제거. |
-| `iconUpdate(iconId, entriesOrId, coords?)` | 아이콘 인스턴스 추가/갱신. 단건 `iconUpdate(id, 'pointId', [lng, lat])` 또는 배치 `iconUpdate(id, [['pointId', [lng, lat]], ...])`. |
+| `iconUpdate(iconId, entriesOrId, coords?)` | 아이콘 인스턴스 추가/갱신. 단건 `iconUpdate(id, 'pointId', [lng, lat])` 또는 배치 `iconUpdate(id, [['pointId', [lng, lat]], ...])`. 형식이 잘못된 좌표는 경고 후 무시한다(단건은 전체 무시, 배치는 해당 항목만 건너뜀). |
 | `iconRemove(iconId, pointIdOrIds?)` | 인스턴스 제거. ID 생략 시 해당 아이콘 전체 제거. |
 | `destroy()` | 이벤트 핸들러·레이어·소스 정리. |
+
+> `iconImgAdd`로 등록한 이미지는 **맵 인스턴스에 귀속된 재사용 자원**이라 `destroy()`로는 제거되지 않는다.
+> 이미지까지 비우려면 `iconImgRemove(iconId)`를 명시적으로 호출한다. (icon 레이어는 맵당 1개 사용을 전제로 한다.)
 
 발신 이벤트 (`host`에서 발생):
 
@@ -168,4 +174,5 @@
 - **인터넷 연결 필요** — MapLibre 라이브러리(CDN)와 지도 타일(OpenFreeMap)을 네트워크에서 받습니다.
 - **좌표 순서** — 모든 좌표는 `[경도(lng), 위도(lat)]` 입니다.
 - **ID 기반 동작** — `*Add` / `*Update` 는 같은 ID로 다시 호출하면 덮어씁니다(upsert).
-- **정리** — 레이어를 더 이상 쓰지 않을 때는 각 레이어의 `destroy()`를 호출하세요.
+- **정리** — 레이어를 더 이상 쓰지 않을 때는 각 레이어의 `destroy()`를 호출하세요. (icon 이미지는 위 설명대로 `iconImgRemove`로 별도 제거)
+- **CDN 로드 실패** — MapLibre 라이브러리를 CDN에서 받지 못하면 `createMap`이 reject되며, 실패한 `<script>`/`<link>` 태그는 남기지 않아 다음 호출에서 깨끗이 재시도됩니다.

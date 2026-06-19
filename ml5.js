@@ -50,10 +50,25 @@
       const script = document.createElement("script");
       script.src = MAPLIBRE_JS;
       script.onerror = (e) => {
+        // 실패한 태그를 제거해 재시도 시 <link>·<script>가 누적되지 않게 한다.
+        link.remove();
+        script.remove();
         _maplibre = null;
         reject(e);
       };
-      script.onload = () => resolve(window.maplibregl);
+      script.onload = () => {
+        // HTTP 200이어도 전역이 설정되지 않을 수 있다(엉뚱한 응답·CSP 차단 등).
+        // 그대로 resolve(undefined)하면 이후 new maplibregl.Map(...)에서 모호하게 터지고
+        // 싱글턴이 영구 오염되므로, 전역 부재 시 태그를 정리하고 명확히 reject한다.
+        if (window.maplibregl) {
+          resolve(window.maplibregl);
+        } else {
+          link.remove();
+          script.remove();
+          _maplibre = null;
+          reject(new Error("maplibregl 전역이 로드되지 않음"));
+        }
+      };
       document.head.appendChild(script);
     });
     return _maplibre;
@@ -76,12 +91,16 @@
    */
   const createMap = async (container, opts = {}) => {
     const maplibregl = await loadMaplibre();
-    const [lng, lat, zoom] = (opts.center ?? "128,35,5").split(",").map(Number);
+    // 'lng,lat,zoom' 파싱. 잘못된/누락된 값은 각 기본값으로 흡수한다(부분 입력에도 안전).
+    const parts = (opts.center ?? "128,35,5").split(",").map(Number);
+    const lng = Number.isFinite(parts[0]) ? parts[0] : 128;
+    const lat = Number.isFinite(parts[1]) ? parts[1] : 35;
+    const zoom = Number.isFinite(parts[2]) ? parts[2] : 5;
     const map = new maplibregl.Map({
       container,
       style: TILE_STYLES[opts.tile] ?? opts.tile ?? TILE_STYLES.liberty,
       center: [lng, lat],
-      zoom: Number.isFinite(zoom) ? zoom : 5,
+      zoom,
       attributionControl: false,
     });
     return new Promise((resolve, reject) => {
@@ -89,13 +108,21 @@
         map.off("error", onError);
         resolve(map);
       };
+      // 타일·소스·글리프·스프라이트 실패 같은 비치명적 error는 load를 막지 않으므로
+      // 경고만 남기고 맵을 유지한다. 스타일 문서 자체가 로드되지 못한 상태(스타일 미로드
+      // + 소스 무관)의 error만 치명으로 보고 맵을 파기·reject한다.
       const onError = (e) => {
+        if (e?.sourceId || map.isStyleLoaded()) {
+          console.warn("[mapLibre] 비치명적 맵 오류 — 무시", e?.error ?? e);
+          return;
+        }
         map.off("load", onLoad);
+        map.off("error", onError);
         map.remove();
-        reject(e.error ?? e);
+        reject(e?.error ?? e);
       };
       map.once("load", onLoad);
-      map.once("error", onError);
+      map.on("error", onError);
     });
   };
 

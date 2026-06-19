@@ -57,9 +57,12 @@
    *
    * @param {string} url  이미지 URL (http(s)/data/blob)
    * @param {number} [ms]  타임아웃 ms (기본 5000)
+   * @param {number} [px]  목표 픽셀 크기(정사각형). 주어지면 해당 크기로 리사이즈한다.
+   *   SVG 경로와 동일하게 `size * dpr`을 넘기면 `addImage`의 `pixelRatio: dpr`과 맞물려
+   *   논리 크기가 `size`로 수렴한다. 생략 시 원본 해상도 그대로 디코드한다.
    * @returns {Promise<ImageBitmap>}  MapLibre `addImage`에 전달할 비트맵
    */
-  const loadImageBitmapFromUrl = async (url, ms = 5000) => {
+  const loadImageBitmapFromUrl = async (url, ms = 5000, px) => {
     const ctrl = new AbortController();
     const timer = setTimeout(
         () => ctrl.abort(new DOMException("이미지 로드 타임아웃", "TimeoutError")),
@@ -72,7 +75,13 @@
         throw new Error(`이미지 로드 실패: HTTP ${resp.status}`);
       }
       const blob = await resp.blob();
-      return await createImageBitmap(blob);
+      return Number.isFinite(px) && px > 0
+          ? await createImageBitmap(blob, {
+            resizeWidth: px,
+            resizeHeight: px,
+            resizeQuality: "high",
+          })
+          : await createImageBitmap(blob);
     } finally {
       clearTimeout(timer);
     }
@@ -124,6 +133,20 @@
 
     // iconId → Map<pointId, [lon, lat]>
     const _renderState = new Map();
+
+    /**
+     * 좌표가 유효한 `[lng, lat]` 쌍인지 검사한다.
+     * `lineUpdate`(ml5line.js)의 검증과 동일한 규칙을 사용한다.
+     *
+     * @private
+     * @param {unknown} c  검사할 값
+     * @returns {boolean}  길이 2의 유한수 배열이면 true
+     */
+    const _isValidCoord = (c) =>
+        Array.isArray(c) &&
+        c.length === 2 &&
+        Number.isFinite(c[0]) &&
+        Number.isFinite(c[1]);
 
     // teardown 위해 저장
     let _onClick, _onEnter, _onLeave;
@@ -214,7 +237,7 @@
 
       const imageData = /<svg[\s>]/i.test(code.trimStart())
           ? await svgToImageData(code, size, dpr)
-          : await loadImageBitmapFromUrl(code);
+          : await loadImageBitmapFromUrl(code, 5000, size * dpr);
 
       if (map.hasImage(iconId)) {
         map.removeImage(iconId);
@@ -266,9 +289,21 @@
       const points = _renderState.get(iconId) ?? new Map();
 
       if (typeof entriesOrId === "string") {
+        if (!_isValidCoord(coords)) {
+          console.warn(
+              `[map-icon] iconUpdate: "${iconId}/${entriesOrId}" 좌표 형식 오류 — 무시 (기대: [lng, lat])`,
+          );
+          return;
+        }
         points.set(entriesOrId, coords);
       } else {
         for (const [pointId, coord] of entriesOrId) {
+          if (!_isValidCoord(coord)) {
+            console.warn(
+                `[map-icon] iconUpdate: "${iconId}/${pointId}" 좌표 형식 오류 — 건너뜀 (기대: [lng, lat])`,
+            );
+            continue;
+          }
           if (points.has(pointId)) {
             console.warn(
                 `[map-icon] iconUpdate: pointId "${pointId}" 중복 — 덮어씀`,
