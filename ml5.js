@@ -101,7 +101,15 @@
       style: TILE_STYLES[opts.tile] ?? opts.tile ?? TILE_STYLES.liberty,
       center: [lng, lat],
       zoom,
-      attributionControl: false,
+      // 데이터 출처(OSM/OpenFreeMap) 표기는 라이선스상 항상 노출한다(opt-out 없음).
+      // compact: 작은 ⓘ 버튼으로 접혀 화면을 가리지 않고 클릭 시 펼쳐진다.
+      // customAttribution: 스타일 metadata가 빈약해도 OSM/OpenFreeMap 표기를 보장(MapLibre가 중복 dedupe).
+      attributionControl: {
+        compact: true,
+        customAttribution:
+            '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> | ' +
+            '<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap contributors</a>',
+      },
     });
     return new Promise((resolve, reject) => {
       const onLoad = () => {

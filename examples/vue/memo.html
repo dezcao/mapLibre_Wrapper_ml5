@@ -1,0 +1,1453 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>ml5 level2 예제 — Vue 선박 지도 (sinokor 재구성)</title>
+
+  <!-- level2가 쓰는 프레임워크 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+  <!-- ml5 level2 예제 스타일 (sinokor.html 인라인 <style>에서 이식)
+       - 지도 컨테이너 선택자만 samsung-heavy-industries-map → #map 으로 변경
+       - 펄스 애니메이션을 level2 DOM 오버레이용으로 추가 -->
+  <style>
+    html, body { margin: 0; height: 100%; }
+    body { display: flex; height: 100vh; }
+
+    #vessel-panel {
+      flex: 2;
+      overflow: hidden;
+      padding: 8px 12px;
+      border-right: 1px solid #ccc;
+      background: #f9f9f9;
+      display: flex;
+      flex-direction: column;
+    }
+    .vessel-list {
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .map-area { flex: 8; position: relative; display: flex; }
+    #map { flex: 1; display: block; width: 100%; height: 100%; }
+
+    /* ── Leader Line ── */
+    #leader-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    /* ── Pulse (level2 DOM 오버레이) ──
+       ml5 아이콘은 WebGL symbol이라 CSS 펄스를 직접 못 붙인다.
+       선택된 선박 위치에 div를 띄워 map.project()로 동기화한다. */
+    @keyframes ml5-vessel-pulse {
+      0%   { transform: translate(-50%, -50%) scale(0.35); opacity: 1; }
+      70%  { opacity: 0.8; }
+      100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+    }
+    .vessel-pulse {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      pointer-events: none;
+      animation: ml5-vessel-pulse 1.4s ease-out infinite;
+      z-index: 5;
+    }
+
+    .bubble {
+      position: absolute;
+      background: transparent;
+      border: 0.5px solid #d1d5db;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      width: 200px;
+      min-width: 140px;
+      min-height: 100px;
+      overflow: hidden;
+      resize: both;
+      z-index: 20;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .bubble-header {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 22px;
+      padding: 3px 7px;
+      border-bottom: 0.5px solid #e5e7eb;
+      cursor: move;
+      flex-shrink: 0;
+      user-select: none;
+      background: #f9fafb;
+      border-radius: 6px 6px 0 0;
+    }
+    .bubble-color {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .bubble-name {
+      font-size: 12px;
+      font-weight: 600;
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #111;
+    }
+    .bubble-close {
+      width: 14px;
+      height: 14px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      color: #9ca3af;
+      font-size: 11px;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .bubble-close:hover { background: #fee2e2; color: #ef4444; }
+    .color-btn {
+      height: 22px;
+      font-size: 11px;
+      line-height: 20px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 0 7px;
+      background: #fff;
+      color: #555;
+      cursor: pointer;
+      white-space: nowrap;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    .color-btn.active { background: #eef2ff; border-color: #4f46e5; color: #4f46e5; }
+    .batch-color-input {
+      width: 22px;
+      height: 22px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 0;
+      background: transparent;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    .batch-color-input::-webkit-color-swatch-wrapper { padding: 0; }
+    .batch-color-input::-webkit-color-swatch { border: none; border-radius: 3px; }
+    .batch-color-input::-moz-color-swatch { border: none; border-radius: 3px; }
+    .opacity-control {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      height: 22px;
+      font-size: 11px;
+      font-weight: normal;
+      color: #555;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .opacity-control input[type="range"] {
+      width: 54px;
+      height: 22px;
+      margin: 0;
+      padding: 0;
+      cursor: pointer;
+    }
+    .vessel-row.color-target { outline: 2px solid #4f46e5; outline-offset: -2px; background: #eef2ff; }
+
+    .bubble textarea {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: transparent;
+      resize: none;
+      font-size: 12px;
+      color: #374151;
+      padding: 8px;
+      outline: none;
+      line-height: 1.5;
+      font-family: sans-serif;
+    }
+    .bubble textarea::placeholder { color: #9ca3af; }
+
+    /* ── 패널 ── */
+    .panel-header-wrapper {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 0 6px;
+      font-weight: 600;
+      font-size: 13px;
+      line-height: 1.2;
+      color: #444;
+      flex-shrink: 0;
+    }
+    .panel-header-wrapper > div:first-child {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-height: 22px;
+    }
+    .panel-header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      padding: 0;
+      font-weight: 600;
+      font-size: 13px;
+      color: #444;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .search-row {
+      padding: 6px 4px 6px;
+      border-bottom: 1px solid #ddd;
+      margin-bottom: 4px;
+      flex-shrink: 0;
+    }
+    .search-row input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 5px 8px;
+      font-size: 12px;
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      outline: none;
+      background: #fff;
+    }
+    .search-row input:focus { border-color: #4f46e5; }
+    .count {
+      background: #ddd;
+      border-radius: 10px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: normal;
+    }
+    .vessel-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      border-bottom: 1px solid #eee;
+    }
+    .vessel-row:hover { background: #eef2ff; }
+    .vessel-row.active { background: #e8f0fe; }
+    .vessel-row input[type="checkbox"] { flex-shrink: 0; cursor: pointer; }
+    .vessel-icon-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+    }
+    .list-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 4px;
+      background: #efefef;
+      border-bottom: 1px solid #d0d0d0;
+      flex-shrink: 0;
+      font-size: 11px;
+      color: #777;
+      font-weight: 600;
+    }
+    .list-header input[type="checkbox"] { flex-shrink: 0; cursor: pointer; }
+    .lh-name { flex: 1; }
+    .info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .name-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    .info .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+    .info .id-line { font-size: 11px; color: #666; display: flex; align-items: center; gap: 4px; }
+    .info .id-line .id-text { flex: 1; min-width: 0; }
+    .info .id-line .lbl { color: #999; }
+    .locate-btn {
+      flex-shrink: 0;
+      width: 24px; height: 24px;
+      border: 1px solid #d1d5db;
+      background: none;
+      cursor: pointer;
+      padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      color: #aaa;
+    }
+    .locate-btn:hover { background: #e0e7ff; color: #4f46e5; border-color: #4f46e5; }
+    .globe-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+      height: 22px;
+      font-size: 11px;
+      font-weight: normal;
+      color: #555;
+      cursor: pointer;
+      user-select: none;
+      white-space: nowrap;
+    }
+    .globe-toggle input { width: 13px; height: 13px; margin: 0; cursor: pointer; }
+    .line-style-select {
+      height: 22px;
+      font-size: 11px;
+      line-height: 20px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 0 6px;
+      background: #fff;
+      color: #555;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+
+    /* ── Print 모드 ── */
+    body.print-mode {
+      display: block;
+      overflow: hidden;
+    }
+    body.print-mode #vessel-panel { display: none; }
+    body.print-mode .bubble-close { display: none !important; }
+    body.print-mode .map-area {
+      flex: none;
+      width: 100%;
+      height: 100vh;
+      min-width: 0;
+      overflow: hidden;
+    }
+    body.print-mode #map {
+      width: 100%;
+      height: 100%;
+    }
+
+    @media print {
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+      }
+      body {
+        display: block;
+        height: 100vh;
+      }
+      #vessel-panel,
+      #print-toast {
+        display: none !important;
+      }
+      .map-area {
+        display: block;
+        position: fixed;
+        inset: 0;
+        width: auto;
+        height: auto;
+        overflow: hidden;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+      #map {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      .bubble {
+        resize: none;
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+    }
+
+    .print-btn {
+      height: 22px;
+      font-size: 11px;
+      line-height: 20px;
+      border: 1px solid #d1d5db;
+      border-radius: 4px;
+      padding: 0 7px;
+      background: #fff;
+      color: #555;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-sizing: border-box;
+    }
+    .print-btn:hover { background: #e0e7ff; border-color: #4f46e5; color: #4f46e5; }
+
+    #print-toast {
+      position: fixed;
+      top: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.68);
+      color: #fff;
+      font-size: 13px;
+      padding: 8px 20px;
+      border-radius: 20px;
+      pointer-events: none;
+      z-index: 9999;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    #print-toast.visible { opacity: 1; }
+  </style>
+
+  <!-- level1 (ml5) — 순수 지도 코어. 도메인 로직 없음. -->
+  <script src="../../ml5.js"></script>
+  <script src="../../ml5line.js"></script>
+  <script src="../../ml5icon.js"></script>
+  <script src="../../ml5content.js"></script>
+</head>
+<body>
+<div id="print-toast">ESC를 누르면 원래대로 돌아옵니다</div>
+
+<!-- 좌측: Vue 패널 (level2 UI) -->
+<div id="vessel-panel"></div>
+
+<!-- 우측: 지도 + level2 오버레이(리더 라인 · 펄스 · 말풍선) -->
+<div class="map-area">
+  <div id="map"></div>
+
+  <!-- Leader Line SVG overlay -->
+  <svg id="leader-svg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="leader-arr" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
+        <circle cx="3" cy="3" r="1.5" fill="#94a3b8" />
+      </marker>
+    </defs>
+    <g id="leader-lines"></g>
+  </svg>
+
+  <!-- 펄스 · 말풍선 컨테이너 -->
+  <div id="bubbles-container"></div>
+</div>
+
+<!-- level2 본체 — 인증 + 데이터 API + 맵 + UI -->
+<script>
+/**
+ * level1(ml5: createMap / createIconLayer / createPopupLayer)을 로드한 뒤
+ * 그 위에서 "서비스 영역"을 구현한다:
+ *   - 인증 토큰 수신 (AuthService)
+ *   - 데이터 API (VesselApi)
+ *   - 아이콘/툴팁/클릭 배선
+ *   - 리더 라인 · 펄스 · 정보 말풍선 오버레이 (ml5 범위 밖 → level2가 직접)
+ *   - Vue 좌측 패널 (목록 · 검색 · 색상 · 라인스타일 · 투명도 · 인쇄모드)
+ *
+ * level1(ml5)에는 도메인 코드가 없음. 인증/데이터/UI는 모두 이곳에서.
+ */
+(async () => {
+  "use strict";
+  
+  // ── AuthService — Sample일 뿐, 토큰을 받고, 요청에 Bearer를 붙인다 ──
+  const auth = (() => {
+    /** @type {string|null} */
+    let token = null;
+    
+    /**
+     * 캐시된 토큰을 반환하고, 없으면 공급자로부터 발급받아 캐시한다.
+     * @returns {Promise<string>}
+     */
+    const getToken = async () => {
+      if (token) return token;
+      // todo.
+      // const res = await fetch(`some auth api url`);
+      // const json = await res.json();
+      // token = json.data.accessToken;
+      token = '1234567890'
+      return token;
+    };
+
+    /**
+     * API를 호출시 Authorization 헤더 주입.
+     * 401이면 토큰을 비우고 한 번 재발급해 재시도.
+     * @param {string} path  어딘가 주소
+     * @param {RequestInit} [options]
+     * @returns {Promise<Response>}
+     */
+    const apiFetch = async (path, options = {}) => {
+      const call = (t) =>
+        fetch(`어딘가로 보낸다.`, {
+          ...options,
+          headers: { ...(options.headers || {}), Authorization: `Bearer ${t}` },
+        });
+      let res = await call(await getToken());
+      if (res.status === 401) {
+        token = null; // 만료로 간주, 한 번은 재시도
+        res = await call(await getToken());
+      }
+      return res;
+    };
+
+    return { getToken, apiFetch };
+  })();
+
+  // ── Api ───────────────────────────────
+  const api = {
+    getMyVessels: async () => {
+      // todo.
+      // const res = await auth.apiFetch("무언가 데이터 API URL");
+      // const json = await res.json();
+      // return json.data;
+      //
+      // ↓ API가 없는 범용 샘플용 하드코딩 데이터(23척).
+      //   실제 연동 시 위 fetch 결과(json.data)로 교체하면 된다.
+      //   필드: vesselId(고유), vesselName, vesselTypeCode(색상 결정), longitude, latitude, heading, sog, mmsi, imoNumber
+      return [
+        { vesselId: "V001", vesselName: "HANBADA",        vesselTypeCode: 70, longitude: 128.95, latitude: 35.05, heading: 45,  sog: 12.4, mmsi: 440100001, imoNumber: 9100001 },
+        { vesselId: "V002", vesselName: "DONGHAE STAR",   vesselTypeCode: 80, longitude: 129.42, latitude: 35.48, heading: 120, sog: 9.8,  mmsi: 440100002, imoNumber: 9100002 },
+        { vesselId: "V003", vesselName: "PACIFIC GLORY",  vesselTypeCode: 80, longitude: 127.74, latitude: 34.76, heading: 210, sog: 14.1, mmsi: 440100003, imoNumber: 9100003 },
+        { vesselId: "V004", vesselName: "SEOHAE PIONEER", vesselTypeCode: 70, longitude: 126.38, latitude: 36.95, heading: 330, sog: 11.2, mmsi: 440100004, imoNumber: 9100004 },
+        { vesselId: "V005", vesselName: "JEJU SPIRIT",    vesselTypeCode: 60, longitude: 126.53, latitude: 33.51, heading: 75,  sog: 18.6, mmsi: 440100005, imoNumber: 9100005 },
+        { vesselId: "V006", vesselName: "BUSAN EXPRESS",  vesselTypeCode: 70, longitude: 129.08, latitude: 35.10, heading: 160, sog: 0.2,  mmsi: 440100006, imoNumber: 9100006 },
+        { vesselId: "V007", vesselName: "ULSAN CARRIER",  vesselTypeCode: 80, longitude: 129.55, latitude: 35.42, heading: 95,  sog: 7.5,  mmsi: 440100007, imoNumber: 9100007 },
+        { vesselId: "V008", vesselName: "GWANGYANG SUN",  vesselTypeCode: 70, longitude: 127.70, latitude: 34.90, heading: 280, sog: 10.9, mmsi: 440100008, imoNumber: 9100008 },
+        { vesselId: "V009", vesselName: "INCHEON DAWN",   vesselTypeCode: 60, longitude: 126.59, latitude: 37.45, heading: 200, sog: 16.3, mmsi: 440100009, imoNumber: 9100009 },
+        { vesselId: "V010", vesselName: "TONGYEONG NET",  vesselTypeCode: 30, longitude: 128.42, latitude: 34.85, heading: 50,  sog: 4.1,  mmsi: 440100010, imoNumber: 9100010 },
+        { vesselId: "V011", vesselName: "YEOSU TUG 1",    vesselTypeCode: 52, longitude: 127.66, latitude: 34.74, heading: 15,  sog: 3.3,  mmsi: 440100011, imoNumber: 9100011 },
+        { vesselId: "V012", vesselName: "EAST SEA HOPE",  vesselTypeCode: 70, longitude: 130.10, latitude: 36.50, heading: 135, sog: 13.7, mmsi: 440100012, imoNumber: 9100012 },
+        { vesselId: "V013", vesselName: "NAMHAE PEARL",   vesselTypeCode: 30, longitude: 128.05, latitude: 34.60, heading: 305, sog: 5.6,  mmsi: 440100013, imoNumber: 9100013 },
+        { vesselId: "V014", vesselName: "POHANG STEEL",   vesselTypeCode: 80, longitude: 129.40, latitude: 36.03, heading: 80,  sog: 8.9,  mmsi: 440100014, imoNumber: 9100014 },
+        { vesselId: "V015", vesselName: "MOKPO WAVE",     vesselTypeCode: 70, longitude: 126.30, latitude: 34.78, heading: 250, sog: 6.4,  mmsi: 440100015, imoNumber: 9100015 },
+      ];
+    },
+  };
+
+  // ── 색상 / 아이콘 SVG ─────────────────────────────────────
+  /**
+   * 선종 코드에 대응하는 기본 색상을 반환한다.
+   * @param {number} code  선종 코드
+   * @returns {string} HEX 색상
+   */
+  const colorOf = (code) => {
+    if (code >= 10 && code <= 19) return "#FFD700";
+    if (code >= 20 && code <= 29) return "#489BFF";
+    if (code >= 30 && code <= 39) return "#FF885F";
+    if (code >= 40 && code <= 49) return "#8725E5";
+    if (code >= 50 && code <= 59) return "#FFD700";
+    if (code >= 60 && code <= 69) return "#E823E8";
+    if (code >= 70 && code <= 79) return "#00D337";
+    if (code >= 80 && code <= 89) return "#ED2020";
+    return "#A5A5A5";
+  };
+
+  /**
+   * 지도 아이콘용 SVG(북쪽을 향한 형태). 회전은 ml5 icon-rotate(heading)가 담당한다.
+   * @param {string} color  HEX 색상
+   * @returns {string} SVG 마크업
+   */
+  const vesselSvg = (color) =>
+    `<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">` +
+    `<path d="M16 6 C18 6 24 16 18 24 Q16 21 14 24 C8 16 14 6 16 6 Z" ` +
+    `fill="${color}" stroke="#353535" stroke-width="0.5"/></svg>`;
+
+  /**
+   * 목록 패널용 아이콘 SVG(원본 sinokor 목록 아이콘과 동일).
+   * @param {string} color  HEX 색상
+   * @returns {string} SVG 마크업
+   */
+  const vesselListIcon = (color) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 31.5" width="20" height="20" style="transform:rotate(90deg)" fill="${color}">` +
+    `<path fill="${color}" stroke="black" stroke-width="0.5" d="M13.3,29.4c-0.8-2.2-2.9-3.7-5.3-3.7c-2.4,0-4.5,1.5-5.3,3.7c-1.2-3.2-1.8-6.5-1.9-9.8c0-8,4-14.8,6.3-18.1C7.4,1,7.7,0.8,8,0.8S8.7,1,8.9,1.4c2.4,3.4,6.3,10.2,6.3,18.2C15.1,22.9,14.5,26.2,13.3,29.4z"/></svg>`;
+
+  /**
+   * HEX 색상을 rgba 문자열로 변환한다.
+   * @param {string} hex  '#RRGGBB'
+   * @param {number} alpha  0~1
+   * @returns {string}
+   */
+  const hexToRgba = (hex, alpha) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return `rgba(148, 163, 184, ${alpha})`;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  };
+
+  // ── Vue 상태 ──────────────────────────────────────────────
+  const { createApp, ref, reactive, computed, watch } = Vue;
+
+  const vessels = ref([]);
+  const checked = reactive({});
+  const memoByVesselId = {};
+  const bubbleBgOpacity = ref(100);
+  const vesselColorByVesselId = reactive({});
+  const colorTargets = reactive({});
+
+  /**
+   * 선박의 현재 색상(사용자 지정 우선, 없으면 선종 기본색).
+   * @param {object} v  선박
+   * @returns {string} HEX 색상
+   */
+  const vesselColor = (v) => vesselColorByVesselId[v.vesselId] ?? colorOf(v.vesselTypeCode);
+
+  // ── 맵 (level1) ───────────────────────────────
+  const mapEl = document.getElementById("map");
+  /** @type {any} */
+  let map;
+  try {
+    map = await createMap(mapEl, { center: "128,35,1", tile: "https://tiles.openfreemap.org/styles/dark" });
+  } catch (err) {
+    console.error("[level2] 지도 생성 실패", err);
+    document.getElementById("vessel-panel").textContent =
+      "지도를 불러오지 못했습니다. 네트워크/인증(dev 프록시) 상태를 확인하세요.";
+    return;
+  }
+  const iconLayer = createIconLayer(map);
+  const tooltipLayer = createPopupLayer(map);
+
+  // ── 선박 아이콘 렌더링 (ml5 icon 레이어) ──────────────────
+  // 색상마다 이미지를 lazy 등록하고(iconId='vessel:'+color), 선택된 선박을
+  // 해당 색 아이콘으로 heading 회전과 함께 배치한다.
+  const registeredIcons = new Set();
+  /** @type {Map<string, string>} vesselId → 현재 사용 중인 iconId(색상) */
+  const shownIconId = new Map();
+
+  /**
+   * 색상 아이콘 이미지가 없으면 등록하고 iconId를 반환한다.
+   * @param {string} color  HEX 색상
+   * @returns {Promise<string>} iconId
+   */
+  const ensureColorImage = async (color) => {
+    const iconId = `vessel:${color}`;
+    if (!registeredIcons.has(iconId)) {
+      registeredIcons.add(iconId);
+      await iconLayer.iconImgAdd(iconId, vesselSvg(color), { size: 32 });
+    }
+    return iconId;
+  };
+
+  /**
+   * 선박 한 척을 지도에 배치(또는 갱신)한다.
+   * @param {object} v  선박
+   */
+  const placeVessel = async (v) => {
+    if (v.longitude == null || v.latitude == null) return;
+    const iconId = await ensureColorImage(vesselColor(v));
+    const prev = shownIconId.get(v.vesselId);
+    if (prev && prev !== iconId) iconLayer.iconRemove(prev, v.vesselId);
+    iconLayer.iconUpdate(iconId, v.vesselId, [v.longitude, v.latitude], {
+      rotation: v.heading ?? 0,
+    });
+    shownIconId.set(v.vesselId, iconId);
+  };
+
+  /**
+   * 선박 아이콘을 지도에서 제거한다.
+   * @param {string} vesselId
+   */
+  const unplaceVessel = (vesselId) => {
+    const iconId = shownIconId.get(vesselId);
+    if (iconId) iconLayer.iconRemove(iconId, vesselId);
+    shownIconId.delete(vesselId);
+  };
+
+  /**
+   * 체크된 선박들의 아이콘 상태를 지도와 동기화한다(추가/색상변경/제거 반영).
+   */
+  const renderCheckedMarkers = () => {
+    const checkedIds = new Set(
+      vessels.value.filter((v) => checked[v.vesselId]).map((v) => v.vesselId)
+    );
+    for (const id of [...shownIconId.keys()]) {
+      if (!checkedIds.has(id)) unplaceVessel(id);
+    }
+    vessels.value.filter((v) => checked[v.vesselId]).forEach((v) => placeVessel(v));
+  };
+
+  // ── 색상 변경 ─────────────────────────────────────────────
+  /**
+   * 선박 색상을 바꾸고, 열린 말풍선/리더라인/펄스 색에 반영한다.
+   * @param {object} v  선박
+   * @param {string} color  HEX 색상
+   */
+  const setVesselColor = (v, color) => {
+    vesselColorByVesselId[v.vesselId] = color;
+    const s = leaderState[v.vesselId];
+    if (s) {
+      const ta = s.bubbleEl.querySelector("textarea");
+      const dot = s.bubbleEl.querySelector(".bubble-color");
+      if (ta) ta.style.color = color;
+      if (dot) dot.style.background = color;
+      s.lineEl.setAttribute("stroke", color);
+      if (s.pulseEl) {
+        s.pulseEl.style.background = hexToRgba(color, 0.3);
+        s.pulseEl.style.borderColor = hexToRgba(color, 0.55);
+      }
+    }
+  };
+
+  /**
+   * 여러 선박에 색상을 일괄 적용한 뒤 아이콘을 다시 그린다.
+   * @param {Array<object>} targetVessels
+   * @param {string} color
+   */
+  const applyVesselColors = (targetVessels, color) => {
+    targetVessels.forEach((v) => setVesselColor(v, color));
+    renderCheckedMarkers();
+  };
+
+  // ── 말풍선 투명도 ─────────────────────────────────────────
+  const rgba = (r, g, b, opacity) => `rgba(${r}, ${g}, ${b}, ${Number(opacity) / 100})`;
+
+  /**
+   * 말풍선 배경 투명도를 적용한다.
+   * @param {HTMLElement} bubbleEl
+   */
+  const applyBubbleOpacity = (bubbleEl) => {
+    const opacity = bubbleBgOpacity.value;
+    const alpha = Number(opacity) / 100;
+    bubbleEl.style.borderColor = rgba(209, 213, 219, opacity);
+    bubbleEl.style.boxShadow = `0 2px 8px rgba(0, 0, 0, ${0.08 * alpha})`;
+    bubbleEl.querySelector(".bubble-header")?.style.setProperty("background", rgba(249, 250, 251, opacity));
+    bubbleEl.querySelector(".bubble-header")?.style.setProperty("border-bottom-color", rgba(229, 231, 235, opacity));
+    bubbleEl.querySelector("textarea")?.style.setProperty("background", rgba(255, 255, 255, opacity));
+  };
+
+  /** 모든 말풍선에 현재 투명도를 다시 적용한다. */
+  const updateBubbleOpacity = () => {
+    Object.values(leaderState).forEach((s) => applyBubbleOpacity(s.bubbleEl));
+  };
+
+  // ── Leader Line / Bubble / Pulse 오버레이 ─────────────────
+  /** @type {Record<string, any>} vesselId → { lng, lat, bubbleEl, lineEl, pulseEl, ro, onMove } */
+  const leaderState = {};
+  let lineStyle = "curved"; // 'straight' | 'curved'
+  let strokeStyle = "dashed"; // 'dashed' | 'solid'
+
+  const getMapArea = () => document.querySelector(".map-area");
+  const BUBBLE_INITIAL_WIDTH = 200;
+  const BUBBLE_INITIAL_HEIGHT = 140;
+  const BUBBLE_PAD = 4;
+  const BUBBLE_GAP = 8;
+
+  /** 현재 strokeStyle을 path 엘리먼트에 적용한다. */
+  const applyStroke = (lineEl) => {
+    lineEl.setAttribute("stroke-dasharray", strokeStyle === "dashed" ? "5 3" : "none");
+  };
+
+  /**
+   * 현재 lineStyle에 따라 SVG path d 속성 문자열을 반환한다.
+   * @param {number} x1 @param {number} y1 @param {number} x2 @param {number} y2
+   * @returns {string}
+   */
+  const calcPath = (x1, y1, x2, y2) => {
+    if (lineStyle === "curved") {
+      const midX = x1 + (x2 - x1) * 0.5;
+      return `M ${x1} ${y1} C ${midX} ${y1} ${midX} ${y2} ${x2} ${y2}`;
+    }
+    return `M ${x1} ${y1} L ${x2} ${y2}`;
+  };
+
+  const clampBubblePosition = (left, top, areaW, areaH) => {
+    const maxLeft = Math.max(BUBBLE_PAD, areaW - BUBBLE_INITIAL_WIDTH - BUBBLE_PAD);
+    const maxTop = Math.max(BUBBLE_PAD, areaH - BUBBLE_INITIAL_HEIGHT - BUBBLE_PAD);
+    return {
+      left: Math.min(Math.max(BUBBLE_PAD, left), maxLeft),
+      top: Math.min(Math.max(BUBBLE_PAD, top), maxTop),
+    };
+  };
+
+  const overlaps = (a, b) =>
+    a.left < b.right + BUBBLE_GAP &&
+    a.right > b.left - BUBBLE_GAP &&
+    a.top < b.bottom + BUBBLE_GAP &&
+    a.bottom > b.top - BUBBLE_GAP;
+
+  const overlapArea = (a, b) => {
+    const width = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+    const height = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    return width * height;
+  };
+
+  const EPSILON = 0.001;
+  const cross = (a, b, c) => (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+  const onSegment = (a, b, c) =>
+    Math.min(a.x, c.x) - EPSILON <= b.x && b.x <= Math.max(a.x, c.x) + EPSILON &&
+    Math.min(a.y, c.y) - EPSILON <= b.y && b.y <= Math.max(a.y, c.y) + EPSILON;
+  const segmentsIntersect = (a, b, c, d) => {
+    const abC = cross(a, b, c);
+    const abD = cross(a, b, d);
+    const cdA = cross(c, d, a);
+    const cdB = cross(c, d, b);
+    if (Math.abs(abC) < EPSILON && onSegment(a, c, b)) return true;
+    if (Math.abs(abD) < EPSILON && onSegment(a, d, b)) return true;
+    if (Math.abs(cdA) < EPSILON && onSegment(c, a, d)) return true;
+    if (Math.abs(cdB) < EPSILON && onSegment(c, b, d)) return true;
+    return (abC > 0) !== (abD > 0) && (cdA > 0) !== (cdB > 0);
+  };
+
+  const existingBubbleRects = () =>
+    Object.values(leaderState)
+      .map((s) => {
+        const left = parseFloat(s.bubbleEl.style.left);
+        const top = parseFloat(s.bubbleEl.style.top);
+        const width = s.bubbleEl.offsetWidth || BUBBLE_INITIAL_WIDTH;
+        const height = s.bubbleEl.offsetHeight || BUBBLE_INITIAL_HEIGHT;
+        return { left, top, right: left + width, bottom: top + height };
+      })
+      .filter(
+        (rect) =>
+          Number.isFinite(rect.left) &&
+          Number.isFinite(rect.top) &&
+          Number.isFinite(rect.right) &&
+          Number.isFinite(rect.bottom)
+      );
+
+  const rectAt = (left, top) => ({
+    left,
+    top,
+    right: left + BUBBLE_INITIAL_WIDTH,
+    bottom: top + BUBBLE_INITIAL_HEIGHT,
+  });
+
+  const existingLeaderSegments = () =>
+    Object.values(leaderState).map((s) => {
+      const start = map.project([s.lng, s.lat]);
+      const left = parseFloat(s.bubbleEl.style.left);
+      const top = parseFloat(s.bubbleEl.style.top);
+      const rect = {
+        left,
+        top,
+        right: left + (s.bubbleEl.offsetWidth || BUBBLE_INITIAL_WIDTH),
+        bottom: top + (s.bubbleEl.offsetHeight || BUBBLE_INITIAL_HEIGHT),
+      };
+      return { start, end: closestPointOnRectBorder(start.x, start.y, rect) };
+    });
+
+  /**
+   * 새 말풍선이 겹침·교차를 최소화하도록 배치 좌표를 고른다.
+   * @returns {{left:number, top:number}}
+   */
+  const pickBubblePosition = (x, y, areaW, areaH) => {
+    const rightSideCandidates = [
+      [x + 40, y - 60],
+      [x + 40, y + 40],
+      [x + 40, y - 160],
+      [x + 40, y + 120],
+    ];
+    const leftSideCandidates = [
+      [x - 220, y - 60],
+      [x - 220, y + 40],
+      [x - 220, y - 160],
+      [x - 220, y + 120],
+    ];
+    const verticalCandidates = [
+      [x - 100, y - 180],
+      [x - 100, y + 80],
+    ];
+    const candidates =
+      x > areaW / 2
+        ? [...leftSideCandidates, ...rightSideCandidates, ...verticalCandidates]
+        : [...rightSideCandidates, ...leftSideCandidates, ...verticalCandidates];
+    const gridStep = 32;
+    const maxLeft = Math.max(BUBBLE_PAD, areaW - BUBBLE_INITIAL_WIDTH - BUBBLE_PAD);
+    const maxTop = Math.max(BUBBLE_PAD, areaH - BUBBLE_INITIAL_HEIGHT - BUBBLE_PAD);
+    const gridCandidates = [];
+    for (let top = BUBBLE_PAD; top <= maxTop; top += gridStep) {
+      for (let left = BUBBLE_PAD; left <= maxLeft; left += gridStep) {
+        gridCandidates.push([left, top]);
+      }
+    }
+    gridCandidates.sort((a, b) => {
+      const da = (a[0] - x) ** 2 + (a[1] - y) ** 2;
+      const db = (b[0] - x) ** 2 + (b[1] - y) ** 2;
+      return da - db;
+    });
+    candidates.push(...gridCandidates);
+
+    const existingRects = existingBubbleRects();
+    const existingSegments = existingLeaderSegments();
+    const seen = new Set();
+    let best = null;
+
+    for (const [rawLeft, rawTop] of candidates) {
+      const { left, top } = clampBubblePosition(rawLeft, rawTop, areaW, areaH);
+      const key = `${Math.round(left)}:${Math.round(top)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const rect = rectAt(left, top);
+      const blockedArea = existingRects.reduce((sum, ex) => sum + overlapArea(rect, ex), 0);
+      const overlapCount = existingRects.filter((ex) => overlaps(rect, ex)).length;
+      const end = closestPointOnRectBorder(x, y, rect);
+      const crossingCount = existingSegments.filter((segment) =>
+        segmentsIntersect({ x, y }, end, segment.start, segment.end)
+      ).length;
+      const lineLength = Math.hypot(end.x - x, end.y - y);
+      const edgePenalty = Math.min(left, top, areaW - rect.right, areaH - rect.bottom) < 12 ? 50 : 0;
+      const score =
+        overlapCount * 1000000000 +
+        blockedArea * 1000000 +
+        crossingCount * 1000000 +
+        lineLength * 10 +
+        edgePenalty;
+
+      if (!best || score < best.score) best = { left, top, score };
+    }
+
+    return best ?? clampBubblePosition(candidates[0][0], candidates[0][1], areaW, areaH);
+  };
+
+  const clampBubblesToMapArea = () => {
+    const mapArea = getMapArea();
+    if (!mapArea) return;
+    const pad = 4;
+    const areaW = mapArea.clientWidth;
+    const areaH = mapArea.clientHeight;
+    Object.keys(leaderState).forEach((id) => {
+      const s = leaderState[id];
+      const w = s.bubbleEl.offsetWidth;
+      const h = s.bubbleEl.offsetHeight;
+      const maxLeft = Math.max(pad, areaW - w - pad);
+      const maxTop = Math.max(pad, areaH - h - pad);
+      const left = Math.min(Math.max(pad, parseFloat(s.bubbleEl.style.left) || pad), maxLeft);
+      const top = Math.min(Math.max(pad, parseFloat(s.bubbleEl.style.top) || pad), maxTop);
+      s.bubbleEl.style.left = `${left}px`;
+      s.bubbleEl.style.top = `${top}px`;
+    });
+  };
+
+  const closestPointOnRectBorder = (px, py, rect) => {
+    const clampedX = Math.min(Math.max(px, rect.left), rect.right);
+    const clampedY = Math.min(Math.max(py, rect.top), rect.bottom);
+    const insideX = px >= rect.left && px <= rect.right;
+    const insideY = py >= rect.top && py <= rect.bottom;
+    if (!(insideX && insideY)) return { x: clampedX, y: clampedY };
+    const distances = [
+      { x: px, y: rect.top, distance: py - rect.top },
+      { x: px, y: rect.bottom, distance: rect.bottom - py },
+      { x: rect.left, y: py, distance: px - rect.left },
+      { x: rect.right, y: py, distance: rect.right - px },
+    ];
+    return distances.reduce((nearest, point) => (point.distance < nearest.distance ? point : nearest));
+  };
+
+  /**
+   * 리더 라인 path와 펄스 위치를 지도 좌표에 맞춰 갱신한다.
+   * @param {string} vesselId
+   */
+  const updateLine = (vesselId) => {
+    const s = leaderState[vesselId];
+    if (!s) return;
+
+    const { x, y } = map.project([s.lng, s.lat]);
+
+    if (s.pulseEl) {
+      s.pulseEl.style.left = `${x}px`;
+      s.pulseEl.style.top = `${y}px`;
+    }
+
+    const mapRect = getMapArea()?.getBoundingClientRect();
+    const bubbleRect = s.bubbleEl.getBoundingClientRect();
+    const relativeBubbleRect =
+      mapRect && bubbleRect
+        ? {
+            left: bubbleRect.left - mapRect.left,
+            top: bubbleRect.top - mapRect.top,
+            right: bubbleRect.right - mapRect.left,
+            bottom: bubbleRect.bottom - mapRect.top,
+          }
+        : null;
+    const borderPoint = relativeBubbleRect ? closestPointOnRectBorder(x, y, relativeBubbleRect) : null;
+    const bx = borderPoint ? borderPoint.x : parseFloat(s.bubbleEl.style.left) + s.bubbleEl.offsetWidth / 2;
+    const by = borderPoint ? borderPoint.y : parseFloat(s.bubbleEl.style.top) + s.bubbleEl.offsetHeight / 2;
+
+    s.lineEl.setAttribute("d", calcPath(x, y, bx, by));
+  };
+
+  /**
+   * 선박을 활성화한다: 펄스 + 리더 라인 + 정보 말풍선을 만들고 지도 이동에 동기화.
+   * @param {object} v  선박
+   */
+  const activateLeader = (v) => {
+    const color = vesselColor(v);
+    const lng = v.longitude;
+    const lat = v.latitude;
+    const sog = v.sog;
+
+    if (!checked[v.vesselId]) return; // 조회 중 해제됐으면 취소
+    if (lng == null || lat == null) return;
+
+    const { x, y } = map.project([lng, lat]);
+    const mapArea = getMapArea();
+    const areaW = mapArea.offsetWidth;
+    const areaH = mapArea.offsetHeight;
+    const { left: bx, top: by } = pickBubblePosition(x, y, areaW, areaH);
+
+    // pulse
+    const pulseEl = document.createElement("div");
+    pulseEl.className = "vessel-pulse";
+    pulseEl.style.background = hexToRgba(color, 0.3);
+    pulseEl.style.borderColor = hexToRgba(color, 0.55);
+    document.getElementById("bubbles-container").appendChild(pulseEl);
+
+    // bubble
+    const bubbleEl = document.createElement("div");
+    bubbleEl.className = "bubble";
+    bubbleEl.style.cssText = `left:${bx}px;top:${by}px`;
+
+    const header = document.createElement("div");
+    header.className = "bubble-header";
+    header.innerHTML =
+      `<div class="bubble-color" style="background:${color}"></div>` +
+      `<span class="bubble-name">${v.vesselName}</span>` +
+      `<button class="bubble-close" title="닫기">✕</button>`;
+    header.querySelector(".bubble-close").addEventListener("click", (e) => {
+      e.stopPropagation();
+      deactivateLeader(v.vesselId);
+    });
+
+    const ta = document.createElement("textarea");
+    ta.placeholder = `${v.vesselName}\nSOG ${sog} kn\n메모를 입력하세요...`;
+    ta.value = memoByVesselId[v.vesselId] ?? "";
+    ta.style.color = color;
+    ta.addEventListener("input", () => {
+      memoByVesselId[v.vesselId] = ta.value;
+    });
+
+    bubbleEl.appendChild(header);
+    bubbleEl.appendChild(ta);
+    applyBubbleOpacity(bubbleEl);
+    document.getElementById("bubbles-container").appendChild(bubbleEl);
+
+    makeDraggable(header, bubbleEl, v.vesselId);
+
+    const ro = new ResizeObserver(() => updateLine(v.vesselId));
+    ro.observe(bubbleEl);
+
+    // SVG path
+    const ns = "http://www.w3.org/2000/svg";
+    const lineEl = document.createElementNS(ns, "path");
+    lineEl.setAttribute("fill", "none");
+    lineEl.setAttribute("stroke", color);
+    lineEl.setAttribute("stroke-width", "1.5");
+    lineEl.setAttribute("stroke-opacity", "0.7");
+    applyStroke(lineEl);
+    lineEl.setAttribute("marker-end", "url(#leader-arr)");
+    document.getElementById("leader-lines").appendChild(lineEl);
+
+    // 'render'에 묶어 globe↔mercator 전환('move' 미발생) 시에도 즉시 동기화한다.
+    const onMove = () => updateLine(v.vesselId);
+    map.on("render", onMove);
+
+    leaderState[v.vesselId] = { lng, lat, bubbleEl, lineEl, pulseEl, ro, onMove };
+    updateLine(v.vesselId);
+    ta.focus();
+  };
+
+  /**
+   * 선박을 비활성화한다: 체크 해제 + 오버레이/아이콘 정리.
+   * @param {string} vesselId
+   */
+  const deactivateLeader = (vesselId) => {
+    const s = leaderState[vesselId];
+    checked[vesselId] = false;
+    renderCheckedMarkers();
+    if (!s) return;
+
+    map.off("render", s.onMove);
+
+    const ta = s.bubbleEl.querySelector("textarea");
+    if (ta) memoByVesselId[vesselId] = ta.value;
+
+    s.ro.disconnect();
+    s.bubbleEl.remove();
+    s.lineEl.remove();
+    s.pulseEl?.remove();
+    delete leaderState[vesselId];
+  };
+
+  /**
+   * 말풍선 헤더 드래그로 위치를 옮긴다.
+   * @param {HTMLElement} handle @param {HTMLElement} el @param {string} vesselId
+   */
+  const makeDraggable = (handle, el, vesselId) => {
+    handle.addEventListener("mousedown", (e) => {
+      if (e.target.closest(".bubble-close")) return;
+      e.preventDefault();
+      const sx = e.clientX;
+      const sy = e.clientY;
+      const ol = parseFloat(el.style.left);
+      const ot = parseFloat(el.style.top);
+      const onMove = (e) => {
+        const mapArea = getMapArea();
+        const pad = 4;
+        const maxLeft = Math.max(pad, (mapArea?.clientWidth ?? 0) - el.offsetWidth - pad);
+        const maxTop = Math.max(pad, (mapArea?.clientHeight ?? 0) - el.offsetHeight - pad);
+        const left = Math.min(Math.max(pad, ol + e.clientX - sx), maxLeft);
+        const top = Math.min(Math.max(pad, ot + e.clientY - sy), maxTop);
+        el.style.left = `${left}px`;
+        el.style.top = `${top}px`;
+        updateLine(vesselId);
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+  };
+
+  /**
+   * 선박 선택을 토글한다.
+   * @param {object} v  선박
+   */
+  const toggle = (v) => {
+    const id = v.vesselId;
+    if (checked[id]) {
+      deactivateLeader(id);
+    } else {
+      checked[id] = true;
+      renderCheckedMarkers();
+      activateLeader(v);
+    }
+  };
+
+  // ── Globe 토글 (raw map 사용) ─────────────────────────────
+  /**
+   * 지구본/평면 투영을 전환한다.
+   * @param {boolean} enabled
+   */
+  // globe 모드 시 맵 컨테이너 뒤에 깔 우주 배경(HTML 기준 상대경로)과 사진작가 크레딧.
+  const GLOBE_BG = "img/nathan-anderson-KvgB81s4dF0-unsplash.jpg";
+  const GLOBE_BG_CREDIT = "https://unsplash.com/ko/@nathananderson";
+
+  /**
+   * 배경 사진작가 크레딧 링크를 맵 컨테이너 우측 하단에 단다(없을 때만 생성).
+   * @param {HTMLElement} container  맵 컨테이너
+   * @returns {HTMLElement}  크레딧 앵커 요소
+   */
+  const ensureGlobeCredit = (container) => {
+    let el = container.querySelector(".globe-credit");
+    if (!el) {
+      el = document.createElement("a");
+      el.className = "globe-credit";
+      el.href = GLOBE_BG_CREDIT;
+      el.target = "_blank";
+      el.rel = "noopener noreferrer";
+      el.textContent = "Photo: Nathan Anderson / Unsplash";
+      el.style.cssText =
+          "position:absolute;left:8px;bottom:8px;z-index:1;padding:3px 8px;" +
+          "border-radius:4px;background:rgba(0,0,0,0.45);color:rgba(255,255,255,0.85);" +
+          "font-size:11px;line-height:1.4;text-decoration:none;backdrop-filter:blur(2px);";
+      container.appendChild(el);
+    }
+    return el;
+  };
+
+  const setGlobe = (enabled) => {
+    tooltipLayer.popupRemove("tooltip");
+    map.setProjection?.({ type: enabled ? "globe" : "mercator" });
+    const container = map.getContainer();
+    if (enabled) {
+      // 배경 이미지 위에 은은한 어두운 오버레이를 겹쳐 깐다(가독성·분위기).
+      container.style.background =
+          `linear-gradient(rgba(10,14,30,0.4), rgba(10,14,30,0.4)), url('${GLOBE_BG}') center/cover no-repeat`;
+      ensureGlobeCredit(container).style.display = "";
+      map.setSky?.({ "atmosphere-blend": 0.6 });
+      map.flyTo({ zoom: 2, duration: 1000 });
+    } else {
+      container.style.background = "";
+      const credit = container.querySelector(".globe-credit");
+      if (credit) credit.style.display = "none";
+      map.setSky?.({});
+    }
+  };
+
+  // ── Print 모드 ───────────────────────────────────────────
+  const onEscKey = (e) => {
+    if (e.key === "Escape") exitPrintMode();
+  };
+  let browserPrintMode = false;
+
+  const refreshPrintLayout = () => {
+    map.resize();
+    clampBubblesToMapArea();
+    Object.keys(leaderState).forEach((id) => updateLine(id));
+  };
+
+  const schedulePrintLayoutRefresh = () => {
+    refreshPrintLayout();
+    requestAnimationFrame(() => {
+      refreshPrintLayout();
+      setTimeout(refreshPrintLayout, 80);
+    });
+  };
+
+  let toastTimer = null;
+  /**
+   * 안내 토스트를 표시한다.
+   * @param {string} message @param {number} [duration]
+   */
+  const showToast = (message, duration = 2000) => {
+    const toast = document.getElementById("print-toast");
+    toast.textContent = message;
+    toast.classList.add("visible");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("visible"), duration);
+  };
+
+  const enterPrintMode = () => {
+    document.body.classList.add("print-mode");
+    requestAnimationFrame(schedulePrintLayoutRefresh);
+    showToast("ESC를 누르면 원래대로 돌아옵니다");
+    document.addEventListener("keydown", onEscKey);
+  };
+
+  const exitPrintMode = () => {
+    document.body.classList.remove("print-mode");
+    requestAnimationFrame(() => {
+      map.resize();
+      Object.keys(leaderState).forEach((id) => updateLine(id));
+    });
+    document.removeEventListener("keydown", onEscKey);
+  };
+
+  // ── Vue 앱 ───────────────────────────────────────────────
+  createApp({
+    setup() {
+      const selectAllEl = ref(null);
+      const globeMode = ref(false);
+      const searchQuery = ref("");
+      const lineStyleRef = ref("curved");
+      const strokeStyleRef = ref("dashed");
+      const bubbleBgOpacityRef = bubbleBgOpacity;
+      const colorMode = ref(false);
+      const batchColor = ref("#374151");
+
+      const onLineStyleChange = () => {
+        lineStyle = lineStyleRef.value;
+        Object.keys(leaderState).forEach((id) => updateLine(id));
+      };
+      const onStrokeStyleChange = () => {
+        strokeStyle = strokeStyleRef.value;
+        Object.keys(leaderState).forEach((id) => applyStroke(leaderState[id].lineEl));
+      };
+      const onBubbleOpacityChange = (event) => {
+        bubbleBgOpacity.value = Number(event.target.value);
+        updateBubbleOpacity();
+      };
+      const onPrint = () => enterPrintMode();
+      const onGlobeToggle = () => setGlobe(globeMode.value);
+
+      const flyTo = (v) => {
+        if (v.longitude == null || v.latitude == null) return;
+        map.flyTo({
+          center: [v.longitude, v.latitude],
+          zoom: Math.max(map.getZoom(), 5),
+          duration: 800,
+        });
+      };
+      const selectVessel = (v) => toggle(v);
+      const toggleColorMode = () => {
+        colorMode.value = !colorMode.value;
+        Object.keys(colorTargets).forEach((id) => delete colorTargets[id]);
+        if (colorMode.value) showToast("색상을 변경할 선박을 선택해주세요.");
+      };
+      const toggleColorTarget = (v) => {
+        if (colorTargets[v.vesselId]) delete colorTargets[v.vesselId];
+        else colorTargets[v.vesselId] = true;
+      };
+      const onVesselRowClick = (v) => {
+        if (colorMode.value) toggleColorTarget(v);
+        else selectVessel(v);
+      };
+      const applyBatchColor = () => {
+        const targets = filteredVessels.value.filter((v) => colorTargets[v.vesselId]);
+        if (targets.length === 0) return;
+        applyVesselColors(targets, batchColor.value);
+        colorMode.value = false;
+        Object.keys(colorTargets).forEach((id) => delete colorTargets[id]);
+      };
+
+      const filteredVessels = computed(() => {
+        const q = searchQuery.value.trim().toLowerCase();
+        if (!q) return vessels.value;
+        return vessels.value.filter(
+          (v) =>
+            v.vesselName?.toLowerCase().includes(q) ||
+            String(v.mmsi ?? "").includes(q) ||
+            String(v.imoNumber ?? "").includes(q)
+        );
+      });
+
+      const allChecked = computed(
+        () =>
+          filteredVessels.value.length > 0 &&
+          filteredVessels.value.every((v) => checked[v.vesselId])
+      );
+      const someChecked = computed(
+        () => filteredVessels.value.some((v) => checked[v.vesselId]) && !allChecked.value
+      );
+
+      watch(
+        someChecked,
+        (val) => {
+          if (selectAllEl.value) selectAllEl.value.indeterminate = val;
+        },
+        { flush: "post" }
+      );
+
+      const toggleAll = () => {
+        if (!allChecked.value) {
+          for (const v of filteredVessels.value) {
+            if (!checked[v.vesselId]) {
+              checked[v.vesselId] = true;
+              activateLeader(v);
+            }
+          }
+          renderCheckedMarkers();
+        } else {
+          filteredVessels.value.forEach((v) => deactivateLeader(v.vesselId));
+        }
+      };
+
+      return {
+        vessels,
+        checked,
+        toggle,
+        vesselColor,
+        vesselIcon: vesselListIcon,
+        colorTargets,
+        selectAllEl,
+        allChecked,
+        toggleAll,
+        globeMode,
+        onGlobeToggle,
+        flyTo,
+        onVesselRowClick,
+        searchQuery,
+        filteredVessels,
+        colorMode,
+        batchColor,
+        toggleColorMode,
+        applyBatchColor,
+        lineStyleRef,
+        onLineStyleChange,
+        strokeStyleRef,
+        onStrokeStyleChange,
+        bubbleBgOpacityRef,
+        onBubbleOpacityChange,
+        onPrint,
+      };
+    },
+    template: `
+      <div class="panel-header-wrapper">
+        <div>선박 목록 <span class="count">{{ filteredVessels.length }}</span></div>
+        <div class="panel-header">
+          <select v-model="lineStyleRef" @change="onLineStyleChange" class="line-style-select">
+            <option value="straight">직선</option>
+            <option value="curved">곡선</option>
+          </select>
+          <select v-model="strokeStyleRef" @change="onStrokeStyleChange" class="line-style-select">
+            <option value="dashed">점선</option>
+            <option value="solid">실선</option>
+          </select>
+          <button @click="onPrint" class="print-btn">Print</button>
+          <label class="opacity-control" title="버블 헤더와 메모 배경 투명도">
+            배경
+            <input :value="bubbleBgOpacityRef" @input="onBubbleOpacityChange" type="range" min="0" max="100">
+          </label>
+        </div>
+        <div class="panel-header">
+          <button @click="toggleColorMode" class="color-btn" :class="{ active: colorMode }">색상 변경</button>
+          <input v-if="colorMode" v-model="batchColor" class="batch-color-input" type="color" title="변경할 색상">
+          <button v-if="colorMode" @click="applyBatchColor" class="color-btn">적용</button>
+          <label class="globe-toggle">
+            <input type="checkbox" v-model="globeMode" @change="onGlobeToggle">
+            Globe
+          </label>
+        </div>
+      </div>
+      <div class="search-row">
+        <input v-model="searchQuery" type="text" placeholder="선박명 · IMO · MMSI 검색">
+      </div>
+      <div class="list-header">
+        <input type="checkbox" ref="selectAllEl" :checked="allChecked" @change="toggleAll" @click.stop>
+        <span class="vessel-icon-wrap"></span>
+        <span class="lh-name">선박명</span>
+      </div>
+      <div class="vessel-list">
+        <div
+            v-for="v in filteredVessels"
+            :key="v.vesselId"
+            class="vessel-row"
+            :class="{ active: checked[v.vesselId], 'color-target': colorTargets[v.vesselId] }"
+            @click="onVesselRowClick(v)"
+        >
+          <input type="checkbox" :checked="checked[v.vesselId]" @click.stop @change.stop="toggle(v)">
+          <span class="vessel-icon-wrap" v-html="vesselIcon(v)"></span>
+          <div class="info">
+            <div class="name-line">
+              <div class="name">{{ v.vesselName }}</div>
+              <button class="locate-btn" @click.stop="flyTo(v)" title="지도에서 찾기">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/>
+                  <circle cx="12" cy="12" r="3"/>
+                  <line x1="12" y1="2" x2="12" y2="5"/>
+                  <line x1="12" y1="19" x2="12" y2="22"/>
+                  <line x1="2" y1="12" x2="5" y2="12"/>
+                  <line x1="19" y1="12" x2="22" y2="12"/>
+                </svg>
+              </button>
+            </div>
+            <div class="id-line">
+              <span class="id-text"><span class="lbl">MMSI</span> {{ v.mmsi }} <span class="lbl">IMO</span> {{ v.imoNumber || '—' }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `,
+  }).mount("#vessel-panel");
+
+  // ── 이벤트 배선 (ml5 icon 레이어 → host=map 컨테이너) ──────
+  mapEl.addEventListener("icon-click", (e) => {
+    const v = vessels.value.find((x) => x.vesselId === e.detail.id);
+    if (v && !checked[v.vesselId]) toggle(v);
+  });
+  mapEl.addEventListener("icon-enter", (e) => {
+    const v = vessels.value.find((x) => x.vesselId === e.detail.id);
+    if (!v) return;
+    tooltipLayer.popupUpdate("tooltip", v.vesselName || "", [v.longitude, v.latitude]);
+  });
+  mapEl.addEventListener("icon-leave", () => tooltipLayer.popupRemove("tooltip"));
+
+  // ── 데이터 로드 ───────────────────────────────────────────
+  const myResult = await api.getMyVessels().catch((err) => {
+    console.error("[level2] my-vessels 로드 실패", err);
+    return [];
+  });
+  vessels.value = Array.isArray(myResult) ? myResult : myResult ?? [];
+  renderCheckedMarkers();
+
+  // 샘플: 첫 선박을 선택된 상태로 시작한다(펄스·리더라인·말풍선 포함).
+  if (vessels.value.length) toggle(vessels.value[0]);
+
+  // ── 브라우저 인쇄 연동 ────────────────────────────────────
+  window.addEventListener("beforeprint", () => {
+    browserPrintMode = !document.body.classList.contains("print-mode");
+    document.body.classList.add("print-mode");
+    schedulePrintLayoutRefresh();
+  });
+  window.addEventListener("afterprint", () => {
+    if (!browserPrintMode) return;
+    browserPrintMode = false;
+    exitPrintMode();
+  });
+})();
+</script>
+</body>
+</html>

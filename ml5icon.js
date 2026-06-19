@@ -93,13 +93,18 @@
    */
 
   /**
+   * @typedef {object} IconPointOptions
+   * @property {number} [rotation]  아이콘 회전 각도(도, 시계방향, 기본 0). 지도 북쪽 기준
+   */
+
+  /**
    * @typedef {object} IconLayer
    * @property {(iconId: string, code: string, opts?: IconImgOptions) => Promise<void>} iconImgAdd
    *   SVG 또는 이미지 URL을 맵 스프라이트에 등록한다.
    * @property {(iconId: string) => void} iconImgRemove
    *   등록된 아이콘 이미지와 해당 포인트를 모두 제거한다.
-   * @property {(iconId: string, entriesOrId: Array<[string,[number,number]]>|string, coords?: [number,number]) => void} iconUpdate
-   *   맵 위에 아이콘 인스턴스를 추가하거나 좌표를 갱신한다.
+   * @property {(iconId: string, entriesOrId: Array<[string,[number,number],IconPointOptions?]>|string, coords?: [number,number], opts?: IconPointOptions) => void} iconUpdate
+   *   맵 위에 아이콘 인스턴스를 추가하거나 좌표·회전을 갱신한다.
    * @property {(iconId: string, pointIdOrIds?: string|string[]) => void} iconRemove
    *   아이콘 인스턴스를 제거한다. `pointIdOrIds` 생략 시 해당 `iconId` 전체 제거.
    * @property {() => void} destroy
@@ -131,7 +136,7 @@
     const ICON_SOURCE = `ml-icons-${_uid}`;
     const ICON_LAYER = `ml-icons-layer-${_uid}`;
 
-    // iconId → Map<pointId, [lon, lat]>
+    // iconId → Map<pointId, { coords: [lon, lat], rotation: number }>
     const _renderState = new Map();
 
     /**
@@ -163,7 +168,15 @@
       map.addSource(ICON_SOURCE, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
       map.addLayer({
         id: ICON_LAYER, type: "symbol", source: ICON_SOURCE,
-        layout: { "icon-image": ["get", "icon"], "icon-size": 1, "icon-allow-overlap": true },
+        layout: {
+          "icon-image": ["get", "icon"],
+          "icon-size": 1,
+          "icon-allow-overlap": true,
+          // 포인트별 회전. rotation 속성(도, 시계방향)을 data-driven으로 읽는다.
+          // 'map' 정렬이라 회전 기준이 지도 북쪽 → 선수방향(heading) 등 나침반 각도와 일치.
+          "icon-rotate": ["get", "rotation"],
+          "icon-rotation-alignment": "map",
+        },
       });
 
       _onClick = (e) => {
@@ -198,7 +211,7 @@
 
     /**
      * `_renderState`의 현재 내용을 GeoJSON FeatureCollection으로 변환해
-     * 맵 소스에 반영한다. 각 포인트는 `icon`·`id` 프로퍼티를 가진 Point Feature가 된다.
+     * 맵 소스에 반영한다. 각 포인트는 `icon`·`id`·`rotation` 프로퍼티를 가진 Point Feature가 된다.
      *
      * @private
      * @returns {void}
@@ -207,11 +220,11 @@
       const source = map.getSource(ICON_SOURCE);
       const features = [];
       for (const [iconId, points] of _renderState.entries()) {
-        for (const [pointId, coords] of points.entries()) {
+        for (const [pointId, pt] of points.entries()) {
           features.push({
             type: "Feature",
-            geometry: { type: "Point", coordinates: coords },
-            properties: { icon: iconId, id: pointId },
+            geometry: { type: "Point", coordinates: pt.coords },
+            properties: { icon: iconId, id: pointId, rotation: pt.rotation },
           });
         }
       }
@@ -269,21 +282,23 @@
     // ── 맵 위에 아이콘 표시 / 제거 ──────────────────────────
 
     /**
-     * 맵 위에 아이콘 인스턴스를 추가하거나 좌표를 갱신한다.
+     * 맵 위에 아이콘 인스턴스를 추가하거나 좌표·회전을 갱신한다.
      * 단건과 배치 두 가지 시그니처를 지원한다.
      *
-     * - 단건: `iconUpdate(iconId, 'pointId', [lon, lat])`
-     * - 배치: `iconUpdate(iconId, [ ['pointId', [lon, lat]], ... ])`
+     * - 단건: `iconUpdate(iconId, 'pointId', [lon, lat], { rotation })`
+     * - 배치: `iconUpdate(iconId, [ ['pointId', [lon, lat], { rotation }], ... ])`
      *
+     * `rotation`(도, 시계방향, 기본 0)은 선택값이며, 생략하면 회전 없이 표시한다.
      * 같은 `pointId`가 이미 존재하면 경고 없이 덮어쓴다(`lineUpdate`와 동일한 동작).
      *
      * @param {string} iconId  사용할 아이콘 식별자 (`iconImgAdd`로 등록된 값)
-     * @param {Array<[string, [number,number]]> | string} entriesOrId
-     *   배치 입력 시 `[pointId, [lng, lat]]` 쌍의 배열, 단건 입력 시 `pointId` 문자열
+     * @param {Array<[string, [number,number], IconPointOptions?]> | string} entriesOrId
+     *   배치 입력 시 `[pointId, [lng, lat], opts?]` 튜플의 배열, 단건 입력 시 `pointId` 문자열
      * @param {[number, number]} [coords]  단건 입력 시 포인트 좌표 [lng, lat]
+     * @param {IconPointOptions} [opts]  단건 입력 시 포인트 옵션(회전 등)
      * @returns {void}
      */
-    const iconUpdate = (iconId, entriesOrId, coords) => {
+    const iconUpdate = (iconId, entriesOrId, coords, opts) => {
       _ensureLayer();
 
       const points = _renderState.get(iconId) ?? new Map();
@@ -295,9 +310,9 @@
           );
           return;
         }
-        points.set(entriesOrId, coords);
+        points.set(entriesOrId, { coords, rotation: Number(opts?.rotation) || 0 });
       } else {
-        for (const [pointId, coord] of entriesOrId) {
+        for (const [pointId, coord, entryOpts] of entriesOrId) {
           if (!_isValidCoord(coord)) {
             console.warn(
                 `[map-icon] iconUpdate: "${iconId}/${pointId}" 좌표 형식 오류 — 건너뜀 (기대: [lng, lat])`,
@@ -309,7 +324,7 @@
                 `[map-icon] iconUpdate: pointId "${pointId}" 중복 — 덮어씀`,
             );
           }
-          points.set(pointId, coord);
+          points.set(pointId, { coords: coord, rotation: Number(entryOpts?.rotation) || 0 });
         }
       }
 

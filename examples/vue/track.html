@@ -1,0 +1,1274 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>ml5 level2 예제 — Vue 선박 지도 (shi 재구성)</title>
+
+  <!-- level2가 쓰는 프레임워크 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+
+  <!-- level1 (ml5) — 순수 지도 코어. 도메인 로직 없음. -->
+  <script src="../../ml5.js"></script>
+  <script src="../../ml5line.js"></script>
+  <script src="../../ml5icon.js"></script>
+  <script src="../../ml5circle.js"></script>
+  <script src="../../ml5content.js"></script>
+
+  <style>
+    html, body { margin: 0; height: 100%; }
+    body { display: flex; flex-direction: column; height: 100vh; }
+
+    .app-main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #vessel-panel {
+      flex: 2;
+      overflow: hidden;
+      padding: 8px 12px;
+      border-right: 1px solid #ccc;
+      background: #f9f9f9;
+      display: flex;
+      flex-direction: column;
+    }
+    .vessel-list {
+      overflow-y: auto;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .map-area { flex: 8; position: relative; display: flex; }
+    #map { flex: 1; display: block; width: 100%; height: 100%; }
+
+    /* ── Pulse (level2 DOM 오버레이) ── */
+    @keyframes ml5-vessel-pulse {
+      0%   { transform: translate(-50%, -50%) scale(0.35); opacity: 1; }
+      70%  { opacity: 0.8; }
+      100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+    }
+    #pulse-layer {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      overflow: hidden;
+      z-index: 5;
+    }
+    .vessel-pulse {
+      position: absolute;
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      pointer-events: none;
+      animation: ml5-vessel-pulse 1.4s ease-out infinite;
+    }
+
+    #vessel-modal {
+      display: none;
+      position: absolute;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      z-index: 100;
+    }
+    #vessel-modal.open { display: flex; align-items: center; justify-content: center; }
+    .modal-dialog {
+      width: 90vw; max-width: 1200px;
+      height: 85vh;
+      background: #fff;
+      border-radius: 10px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.3);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .modal-dlg-header {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e5e7eb;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+    .modal-title { flex: 1; font-weight: 700; font-size: 15px; color: #111; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .modal-close {
+      width: 28px; height: 28px;
+      border: 1px solid #d1d5db;
+      background: none;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      color: #6b7280;
+      flex-shrink: 0;
+    }
+    .modal-close:hover { background: #fee2e2; border-color: #ef4444; color: #ef4444; }
+    .modal-dlg-body { display: flex; flex: 1; min-height: 0; }
+    .modal-left  { flex: 7; display: flex; flex-direction: column; border-right: 1px solid #e5e7eb; min-width: 0; }
+    .modal-right { flex: 3; display: flex; flex-direction: column; overflow-y: auto; padding: 16px; gap: 10px; min-width: 0; }
+    .modal-tabs { display: flex; border-bottom: 1px solid #e5e7eb; padding: 0 16px; gap: 0; flex-shrink: 0; }
+    .modal-tab {
+      padding: 10px 18px; font-size: 13px; font-weight: 500; cursor: pointer;
+      border: none; background: none; color: #6b7280;
+      border-bottom: 2px solid transparent; margin-bottom: -1px;
+    }
+    .modal-tab.active { color: #4f46e5; border-bottom-color: #4f46e5; }
+    .modal-tab:hover:not(.active) { color: #374151; }
+    .modal-tab-panel { display: none; flex: 1; overflow-y: auto; padding: 16px; }
+    .modal-tab-panel.active { display: flex; flex-direction: column; gap: 12px; }
+    .media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(600px, 1fr)); gap: 10px; align-content: start; }
+    .media-img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; background: #f3f4f6; display: block; }
+    @keyframes shimmer { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    .media-placeholder { background: #f3f4f6; border-radius: 6px; aspect-ratio: 16/9; animation: shimmer 1.4s ease infinite; }
+    .media-empty { color: #9ca3af; font-size: 13px; text-align: center; padding: 40px 0; }
+    .modal-section { display: flex; flex-direction: column; gap: 4px; }
+    .modal-section-title { font-size: 10px; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.05em; }
+    .modal-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; }
+    .modal-row .lbl { color: #6b7280; }
+    .modal-row .val { font-weight: 500; color: #111; }
+    .modal-loading { padding: 40px; text-align: center; color: #9ca3af; font-size: 13px; }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      font-weight: 600;
+      padding: 10px 0 6px;
+      font-size: 13px;
+      color: #444;
+      border-bottom: none;
+      flex-shrink: 0;
+    }
+    .search-row {
+      padding: 6px 4px 6px;
+      border-bottom: 1px solid #ddd;
+      margin-bottom: 4px;
+      flex-shrink: 0;
+    }
+    .search-row input {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 5px 8px;
+      font-size: 12px;
+      border: 1px solid #d0d0d0;
+      border-radius: 4px;
+      outline: none;
+      background: #fff;
+    }
+    .search-row input:focus { border-color: #4f46e5; }
+    .count {
+      background: #ddd;
+      border-radius: 10px;
+      padding: 1px 6px;
+      font-size: 11px;
+      font-weight: normal;
+    }
+    .vessel-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 4px;
+      cursor: pointer;
+      flex-shrink: 0;
+      border-bottom: 1px solid #eee;
+    }
+    .vessel-row:hover { background: #eef2ff; }
+    .vessel-row.active { background: #e8f0fe; }
+    .vessel-row input[type="checkbox"] { flex-shrink: 0; cursor: pointer; }
+    .vessel-icon-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      width: 28px;
+      height: 28px;
+    }
+    .list-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 5px 4px;
+      background: #efefef;
+      border-bottom: 1px solid #d0d0d0;
+      flex-shrink: 0;
+      font-size: 11px;
+      color: #777;
+      font-weight: 600;
+    }
+    .list-header input[type="checkbox"] { flex-shrink: 0; cursor: pointer; }
+    .lh-name { flex: 1; }
+    .info { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+    .name-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
+    .info .name { font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+    .info .id-line { font-size: 11px; color: #666; display: flex; align-items: center; gap: 4px; }
+    .info .id-line .id-text { flex: 1; min-width: 0; }
+    .info .id-line .lbl { color: #999; }
+    .locate-btn, .expand-btn {
+      flex-shrink: 0;
+      width: 24px; height: 24px;
+      border: 1px solid #d1d5db;
+      background: none;
+      cursor: pointer;
+      padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      color: #aaa;
+    }
+    .locate-btn:hover, .expand-btn:hover { background: #e0e7ff; color: #4f46e5; border-color: #4f46e5; }
+
+    /* ── 지도 팝업(ship-popup) ── */
+    .ship-popup { font-size: 12px; min-width: 160px; }
+    .ship-popup-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin: -15px -10px 0;
+      padding: 10px 10px;
+      background: #f9fafb;
+      border-bottom: 1px solid #e5e7eb;
+      border-radius: 4px 4px 0 0;
+    }
+    .ship-popup-name { flex: 1; font-weight: 700; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+    .ship-popup-btn {
+      flex-shrink: 0;
+      width: 22px; height: 22px;
+      border: none;
+      background: none;
+      cursor: pointer;
+      padding: 0;
+      display: flex; align-items: center; justify-content: center;
+      border-radius: 4px;
+      color: #aaa;
+    }
+    .ship-popup-btn:hover { background: #e0e7ff; color: #4f46e5; }
+    .ship-popup-expand { border: 1px solid #ebebeb !important; }
+    .ship-popup-expand:hover { border-color: #4f46e5 !important; }
+    .ship-popup-close { border: 1px solid #d1d5db !important; }
+    .ship-popup-close:hover { border-color: #4f46e5 !important; }
+    .ship-popup-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: stretch;
+      padding-top: 8px;
+    }
+    .ship-popup-info { display: flex; flex-direction: column; gap: 2px; color: #374151; font-size: 12px; min-width: 100px; }
+    .ship-popup-thumb { width: 100%; height: auto; align-self: stretch; object-fit: cover; border-radius: 4px; flex-shrink: 0; }
+    .track-btns { display: flex; gap: 2px; flex-shrink: 0; }
+    .track-btn {
+      font-size: 10px;
+      font-weight: 700;
+      min-width: 28px;
+      height: 20px;
+      padding: 0 4px;
+      border: 1px solid #d1d5db;
+      border-radius: 3px;
+      background: none;
+      cursor: pointer;
+      color: #6b7280;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .track-btn:hover { background: #eff6ff; border-color: #3b82f6; color: #3b82f6; }
+    .track-btn.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .play-btn {
+      font-size: 10px;
+      width: 20px; height: 20px;
+      border: 1px solid #d1d5db;
+      border-radius: 3px;
+      background: none;
+      cursor: pointer;
+      color: #6b7280;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+      padding: 0;
+    }
+    .play-btn:hover:not(:disabled) { background: #eff6ff; border-color: #3b82f6; color: #3b82f6; }
+    .play-btn.active { background: #3b82f6; border-color: #3b82f6; color: #fff; }
+    .play-btn:disabled { opacity: 0.3; cursor: default; }
+    .track-btn:disabled { opacity: 0.4; cursor: default; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .btn-spinner {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border: 1.5px solid currentColor;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      vertical-align: middle;
+    }
+    .globe-toggle {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: normal;
+      color: #555;
+      cursor: pointer;
+      user-select: none;
+    }
+    .globe-toggle input { cursor: pointer; }
+  </style>
+</head>
+<body>
+<div class="app-main">
+  <div id="vessel-panel"></div>
+  <div class="map-area">
+    <div id="map"></div>
+    <div id="pulse-layer"></div>
+    <div id="vessel-modal"></div>
+  </div>
+</div>
+
+<!-- level2 본체 -->
+<script>
+/**
+ * level1(ml5)을 로드한 뒤 그 위에서 서비스 영역을 구현한다:
+ *   - 인증
+ *   - 데이터 API (내 선박 / 글로벌 선박 / 과거항적 / 정보)
+ *   - 내 선박 아이콘(heading 회전 + 펄스) · 글로벌 선박(원형 아이콘)
+ *   - 선박 팝업(썸네일·상세·닫기) · 호버 툴팁
+ *   - 과거항적 선(7D/14D) — createLineLayer
+ *   - 항적 재생 애니메이션 — 서비스 기능이라 level2가 raw map으로 직접 구현
+ *   - 상세 모달(이미지·LVI)
+ *
+ * 글로벌 선박은 createCircleLayer 같은 신규 level1 기능 없이,
+ * iconImgAdd에 "원형 SVG"를 넘겨 기존 createIconLayer를 그대로 재사용한다.
+ */
+(async () => {
+  "use strict";
+
+  // ── 설정 (범용 샘플: 실제 API 없이 하드코딩 데이터로 동작) ──
+  const TILE_STYLE_URL = "https://tiles.openfreemap.org/styles/bright";
+
+  // ── AuthService — 샘플 보일러플레이트(토큰을 받고, 요청에 Bearer를 붙인다) ──
+  const auth = (() => {
+    /** @type {string|null} */ let token = null;
+
+    /**
+     * 캐시된 토큰을 반환하고, 없으면 발급받아 캐시한다.
+     * @returns {Promise<string>}
+     */
+    const getToken = async () => {
+      if (token) return token;
+      // todo. 실제 서비스: 인증 API에서 토큰 발급
+      token = "sample-token-1234567890";
+      return token;
+    };
+
+    /**
+     * API 호출 시 Authorization 헤더 주입(401이면 1회 재발급 재시도).
+     * @param {string} path @param {RequestInit} [options]
+     * @returns {Promise<Response>}
+     */
+    const apiFetch = async (path, options = {}) => {
+      // todo. 실제 서비스: 백엔드로 요청을 보낸다.
+      await getToken();
+      return new Response(null, { status: 200 });
+    };
+
+    return { getToken, apiFetch };
+  })();
+
+  // ── 샘플 데이터 (실제 API 없이 동작하도록 하드코딩) ────────
+  // 필드: vesselId(고유), vesselName, vesselTypeCode(색상), vesselType(이미지 매핑),
+  //       longitude, latitude, heading, mmsi, imoNumber
+  /** @type {Array<object>} 내 선박 3척 */
+  const MY_VESSELS = [
+    // 동해: heading 서쪽(육지 방향) → 항적은 동쪽 외해(Sea of Japan)로 트레일
+    { vesselId: "V001", vesselName: "DONGHAE STAR",   vesselTypeCode: 70, vesselType: "CONTAINER",    longitude: 131.0, latitude: 37.5, heading: 270, mmsi: 440100001, imoNumber: 9100001 },
+    // 남해: heading 북북동(육지 방향) → 항적은 남남서 외해(제주 동쪽)로 트레일
+    { vesselId: "V002", vesselName: "NAMHAE PIONEER", vesselTypeCode: 80, vesselType: "TANKER_CRUDE", longitude: 128.8, latitude: 33.8, heading: 20,  mmsi: 440100002, imoNumber: 9100002 },
+    // 서해: heading 동북동(육지 방향) → 항적은 서남서 외해(황해 중앙)로 트레일
+    { vesselId: "V003", vesselName: "SEOHAE SPIRIT",  vesselTypeCode: 20, vesselType: "LNG_CARRIER",  longitude: 124.8, latitude: 34.8, heading: 60,  mmsi: 440100003, imoNumber: 9100003 },
+  ];
+
+  /** 글로벌 선박 30척 */
+  const GLOBAL_TYPE_CODES = [70, 80, 60, 30, 40, 20]; // green/red/magenta/orange/purple/blue
+  const GLOBAL_TYPE_NAMES = ["CONTAINER", "TANKER_CRUDE", "PASSENGER", "FISHING", "CAR_CARRIER", "LNG_CARRIER"];
+  
+  const hashRand = (seed) => {
+    const x = Math.sin(seed * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  
+  const SEA_ZONES = [
+    { west: 123.4, east: 125.7, south: 33.5, north: 37.2, count: 8 }, // 서해(황해)
+    { west: 126.2, east: 129.3, south: 32.2, north: 34.2, count: 8 }, // 남해
+    { west: 129.8, east: 132.6, south: 35.2, north: 38.8, count: 8 }, // 동해
+    { west: 125.5, east: 127.6, south: 31.6, north: 33.1, count: 6 }, // 제주 남쪽
+  ];
+  /** @type {Array<object>} */
+  const GLOBAL_VESSELS = [];
+  SEA_ZONES.forEach((z) => {
+    for (let j = 0; j < z.count; j++) {
+      const i = GLOBAL_VESSELS.length;
+      const fx = hashRand(i + 1);          // 두 축에 서로 다른 seed 불규칙 산포
+      const fy = hashRand(i + 101);
+      const t = i % GLOBAL_TYPE_CODES.length;
+      GLOBAL_VESSELS.push({
+        vesselId: `G${String(i + 1).padStart(3, "0")}`,
+        vesselName: `GLOBAL VESSEL ${String(i + 1).padStart(3, "0")}`,
+        vesselTypeCode: GLOBAL_TYPE_CODES[t],
+        vesselType: GLOBAL_TYPE_NAMES[t],
+        longitude: Math.round((z.west + (z.east - z.west) * fx) * 1e4) / 1e4,
+        latitude: Math.round((z.south + (z.north - z.south) * fy) * 1e4) / 1e4,
+        heading: Math.floor(hashRand(i + 201) * 360),
+        mmsi: 200000000 + i,
+        imoNumber: 9200000 + i,
+      });
+    }
+  });
+
+  /**
+   * 내 선박 한 척의 과거항적을 결정적으로 만든다(현재 위치에서 과거로 거슬러 14일).
+   * 무작위가 아니라 vesselId/index로 고정되므로 "미리 하드코딩된" 항적 재현.
+   * @param {object} vessel @param {number} vIndex @returns {Array<object>}
+   */
+  const buildSampleTrack = (vessel, vIndex) => {
+    const POINTS = 29;
+    const STEP_MS = 12 * 3600 * 1000;
+    const now = Date.now();
+    const seed = vIndex + 1;
+    const list = [];
+    for (let i = 0; i < POINTS; i++) {
+      const age = POINTS - 1 - i;
+      const drift = Math.sin((age + seed) * 0.5) * 0.08;
+      const rad = ((vessel.heading ?? 0) + 180 + drift * 45) * Math.PI / 180;
+      const dist = age * 0.12;
+      list.push({
+        posUtc: new Date(now - age * STEP_MS).toISOString(),
+        longitude: Math.round((vessel.longitude + Math.sin(rad) * dist) * 1e5) / 1e5,
+        latitude: Math.round((vessel.latitude + Math.cos(rad) * dist) * 1e5) / 1e5,
+        sog: Math.round((8 + Math.sin(age + seed) * 4) * 10) / 10,
+      });
+    }
+    
+    const bearing = (a, b) => {
+      const lat1 = a.latitude * Math.PI / 180, lat2 = b.latitude * Math.PI / 180;
+      const dLng = (b.longitude - a.longitude) * Math.PI / 180;
+      const y = Math.sin(dLng) * Math.cos(lat2);
+      const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+      return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    };
+    for (let k = 0; k < list.length; k++) {
+      const hdg =
+        k < list.length - 1 ? bearing(list[k], list[k + 1])
+        : k > 0 ? bearing(list[k - 1], list[k])
+        : (vessel.heading ?? 0);
+      list[k].heading = Math.round(hdg);
+      list[k].cog = Math.round(hdg);
+    }
+    return list;
+  };
+
+  /** @type {Map<string, Array<object>>} vesselId → 미리 만들어 둔 과거항적 */
+  const PAST_TRACKS = new Map(MY_VESSELS.map((v, i) => [v.vesselId, buildSampleTrack(v, i)]));
+
+  // ── VesselApi (샘플: 위 하드코딩 데이터를 그대로 반환) ─────
+  const api = {
+    /** @returns {Promise<Array<object>>} 내 선박 목록 */
+    getMyVessels: async () => {
+      // todo. api
+      return MY_VESSELS;
+    },
+    /** @returns {Promise<Array<object>>} 글로벌 선박 목록 */
+    getGlobalVessels: async () => {
+      // todo. api
+      return GLOBAL_VESSELS;
+    },
+    /**
+     * 요청 기간([startDate, endDate]) 안에 드는 항적 포인트만 반환한다.
+     * (7D/14D 버튼이 서로 다른 길이의 선을 그리도록)
+     * @param {string} vesselId @param {{startDate?:string,endDate?:string}} [opts]
+     * @returns {Promise<object>}
+     */
+    getPastTrack: async (vesselId, { startDate, endDate } = {}) => {
+      const end = endDate ? new Date(endDate).getTime() : Date.now();
+      const start = startDate ? new Date(startDate).getTime() : end - 14 * 86_400_000;
+      const list = (PAST_TRACKS.get(vesselId) ?? []).filter((p) => {
+        const t = new Date(p.posUtc).getTime();
+        return t >= start && t <= end;
+      });
+      return { data: { list } };
+    },
+    /**
+     * 임의의 샘플.
+     * @param {string} vesselId @param {{positionDate?:string}} [opts]
+     * @returns {Promise<object>}
+     */
+    getLvi: async (vesselId, { positionDate } = {}) => {
+      const v = MY_VESSELS.find((x) => x.vesselId === vesselId)
+        ?? GLOBAL_VESSELS.find((x) => x.vesselId === vesselId)
+        ?? { latitude: 35, longitude: 128, heading: 0 };
+      const jitter = () => (Math.random() - 0.5) * 0.05;
+      return {
+        data: {
+          latitude: Math.round((v.latitude + jitter()) * 1e5) / 1e5,
+          longitude: Math.round((v.longitude + jitter()) * 1e5) / 1e5,
+          sog: Math.round((Math.random() * 18 + 1) * 10) / 10,
+          cog: Math.floor(Math.random() * 360),
+          heading: v.heading ?? Math.floor(Math.random() * 360),
+        },
+      };
+    },
+  };
+
+  // ── 색상 / 아이콘 SVG ─────────────────────────────────────
+  /**
+   * 선종 코드 → 색상.
+   * @param {number} code @returns {string}
+   */
+  const colorOf = (code) => {
+    if (code >= 10 && code <= 19) return "#FFD700";
+    if (code >= 20 && code <= 29) return "#489BFF";
+    if (code >= 30 && code <= 39) return "#FF885F";
+    if (code >= 40 && code <= 49) return "#8725E5";
+    if (code >= 50 && code <= 59) return "#FFD700";
+    if (code >= 60 && code <= 69) return "#E823E8";
+    if (code >= 70 && code <= 79) return "#00D337";
+    if (code >= 80 && code <= 89) return "#ED2020";
+    return "#A5A5A5";
+  };
+
+  /** 내 선박용 북향 teardrop SVG(회전은 ml5 icon-rotate가 담당). */
+  const shipSvg = (color) =>
+    `<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">` +
+    `<path d="M16 6 C18 6 24 16 18 24 Q16 21 14 24 C8 16 14 6 16 6 Z" ` +
+    `fill="${color}" stroke="#353535" stroke-width="0.5"/></svg>`;
+
+  /** 목록 패널용 아이콘 SVG. */
+  const vesselListIcon = (code) => {
+    const color = colorOf(code);
+    return (
+      `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 31.5" width="20" height="20" style="transform:rotate(90deg)" fill="${color}">` +
+      `<path fill="${color}" stroke="black" stroke-width="0.5" d="M13.3,29.4c-0.8-2.2-2.9-3.7-5.3-3.7c-2.4,0-4.5,1.5-5.3,3.7c-1.2-3.2-1.8-6.5-1.9-9.8c0-8,4-14.8,6.3-18.1C7.4,1,7.7,0.8,8,0.8S8.7,1,8.9,1.4c2.4,3.4,6.3,10.2,6.3,18.2C15.1,22.9,14.5,26.2,13.3,29.4z"/></svg>`
+    );
+  };
+
+  /**
+   * @param {string} hex @param {number} alpha @returns {string}
+   */
+  const hexToRgba = (hex, alpha) => {
+    const m = /^#?([0-9a-f]{6})$/i.exec(hex || "");
+    if (!m) return `rgba(148, 163, 184, ${alpha})`;
+    const n = parseInt(m[1], 16);
+    return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+  };
+
+  // ── 선박 이미지(썸네일) ───────────────────────────────────
+  // 외부 샘플 이미지 서비스(picsum.photos): 사이즈를 path(/{w}/{h})에 지정하고
+  // seed로 선박마다 고정된 이미지를 받는다. 실제 서비스 시 자사 이미지 URL로 교체.
+  const SAMPLE_IMAGE_HOST = "https://picsum.photos";
+
+  /**
+   * 외부 샘플 이미지 URL을 만든다(사이즈는 path로 지정).
+   * @param {string|number} seed  선박마다 고정값(같은 seed → 같은 이미지)
+   * @param {number} [width] @param {number} [height]
+   * @returns {string}
+   */
+  const sampleImageUrl = (seed, width = 600, height = 338) =>
+    `${SAMPLE_IMAGE_HOST}/seed/${encodeURIComponent(String(seed))}/${width}/${height}`;
+
+  /** @param {object} [v]  선박을 식별하는 seed */
+  const imageSeed = (v = {}) => v.vesselId ?? v.mmsi ?? v.vesselName ?? "vessel";
+
+  /**
+   * 선박 썸네일 이미지 URL(사이즈 지정 가능, 선박마다 고정).
+   * @param {object} [v] @param {number} [width] @param {number} [height] @returns {string}
+   */
+  const getVesselImage = (v = {}, width = 600, height = 338) =>
+    sampleImageUrl(imageSeed(v), width, height);
+
+  /** @param {object} [v] @returns {Promise<{images:string[]}>} 상세 모달용 이미지 4장 */
+  const getVesselMedia = async (v = {}) => ({
+    images: Array.from({ length: 4 }, (_, i) => sampleImageUrl(`${imageSeed(v)}-${i}`, 600, 338)),
+  });
+
+  // ── Vue 상태 ──────────────────────────────────────────────
+  const { createApp, ref, reactive, computed, watch } = Vue;
+  const vessels = ref([]);
+  const checked = reactive({});
+  /** @type {Map<string, object>} vesselId → 글로벌 선박 */
+  let globalVesselsMap = new Map();
+
+  /** @param {string} id @returns {object|undefined} 내/글로벌 선박 조회 */
+  const vesselById = (id) => vessels.value.find((v) => v.vesselId === id) ?? globalVesselsMap.get(id);
+
+  // ── 맵 부트스트랩 (level1) ───────────────────────────────
+  const mapEl = document.getElementById("map");
+  /** @type {any} */ let map;
+  try {
+    map = await createMap(mapEl, { center: "128,35,5", tile: TILE_STYLE_URL });
+  } catch (err) {
+    console.error("[shi] 지도 생성 실패", err);
+    document.getElementById("vessel-panel").textContent =
+      "지도를 불러오지 못했습니다. 네트워크/인증(dev 프록시) 상태를 확인하세요.";
+    return;
+  }
+  const iconLayer = createIconLayer(map); // 내 선박(heading 회전 아이콘)
+  const circleLayer = createCircleLayer(map); // 글로벌 선박(원형 점)
+  const popupLayer = createPopupLayer(map); // 선박 정보 팝업
+  const tooltipLayer = createPopupLayer(map); // 호버 툴팁
+  const lineLayer = createLineLayer(map); // 과거항적 선
+
+  // ── 아이콘 렌더링 (색상별 배치) ──────────────────
+  const registeredIcons = new Set();
+  /**
+   * 색상 아이콘 이미지가 없으면 등록한다.
+   * @param {string} iconId @param {string} svg @param {number} size
+   */
+  const ensureImage = async (iconId, svg, size) => {
+    if (registeredIcons.has(iconId)) return;
+    registeredIcons.add(iconId);
+    await iconLayer.iconImgAdd(iconId, svg, { size });
+  };
+
+  /**
+   * 내 선박을 색상별로 묶어 teardrop 아이콘(heading 회전)으로 배치한다.
+   * @param {Array<object>} list
+   */
+  const drawMyVessels = async (list) => {
+    const byColor = new Map();
+    for (const v of list) {
+      if (v.longitude == null || v.latitude == null) continue;
+      const color = colorOf(v.vesselTypeCode);
+      if (!byColor.has(color)) byColor.set(color, []);
+      byColor.get(color).push(v);
+    }
+    for (const [color, vs] of byColor) {
+      const iconId = `ship:${color}`;
+      await ensureImage(iconId, shipSvg(color), 32);
+      const entries = vs.map((v) => [v.vesselId, [v.longitude, v.latitude], { rotation: v.heading ?? 0 }]);
+      iconLayer.iconUpdate(iconId, entries);
+    }
+  };
+
+  /**
+   * 글로벌 선박을 원형 점(circle 레이어)으로 한 번에 배치한다.
+   * 색은 data-driven이라 이미지 등록이 필요 없고, 수천 개도 가볍다.
+   * @param {Array<object>} list
+   */
+  const drawGlobalCircles = (list) => {
+    const entries = list
+      .filter((v) => v.longitude != null && v.latitude != null)
+      .map((v) => [v.vesselId, [v.longitude, v.latitude], { color: colorOf(v.vesselTypeCode), radius: 3, opacity: 0.45 }]);
+    circleLayer.circleUpdate(entries);
+  };
+
+  // ── 펄스 오버레이 (내 선박) ──────────────────────────────
+  const pulseLayerEl = document.getElementById("pulse-layer");
+  /** @type {Array<{lng:number, lat:number, el:HTMLElement}>} */
+  const pulses = [];
+
+  /** @param {Array<object>} list  펄스를 붙일 내 선박들 */
+  const addPulses = (list) => {
+    for (const v of list) {
+      if (v.longitude == null || v.latitude == null) continue;
+      const el = document.createElement("div");
+      el.className = "vessel-pulse";
+      const c = colorOf(v.vesselTypeCode);
+      el.style.background = hexToRgba(c, 0.3);
+      el.style.border = `1px solid ${hexToRgba(c, 0.55)}`;
+      pulseLayerEl.appendChild(el);
+      pulses.push({ lng: v.longitude, lat: v.latitude, el });
+    }
+  };
+
+  /** 모든 펄스를 현재 지도 좌표에 맞춰 재배치한다. */
+  const syncPulses = () => {
+    for (const p of pulses) {
+      const { x, y } = map.project([p.lng, p.lat]);
+      p.el.style.left = `${x}px`;
+      p.el.style.top = `${y}px`;
+    }
+  };
+  
+  map.on("render", syncPulses);
+
+  // ── 선박 팝업 ─────────────────────────────────────────────
+  /**
+   * 팝업 DOM을 만든다.
+   * @param {object} v  선박 기본정보
+   * @param {object} d  위치·식별 데이터(보통 v 동일)
+   * @param {{showExpand?:boolean, showThumb?:boolean}} [opt]
+   * @returns {HTMLElement}
+   */
+  const buildPopupEl = (v, d, { showExpand = true, showThumb = true } = {}) => {
+    const el = document.createElement("div");
+    el.className = "ship-popup";
+    el.innerHTML = `
+      <div class="ship-popup-header">
+        <span class="ship-popup-name">${v.vesselName}</span>
+        ${showExpand ? `<button class="ship-popup-btn ship-popup-expand" title="상세 보기">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+            <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+          </svg>
+        </button>` : ""}
+        <button class="ship-popup-btn ship-popup-close" title="닫기">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="ship-popup-body">
+        <div class="ship-popup-info">
+          <div>MMSI: ${d.mmsi != null ? d.mmsi : "—"}</div>
+          <div>IMO: ${d.imoNumber != null ? d.imoNumber : "—"}</div>
+        </div>
+        ${showThumb ? `<img class="ship-popup-thumb" src="${getVesselImage(v, 320, 180)}" alt="" loading="lazy">` : ""}
+      </div>`;
+    el.querySelector(".ship-popup-close").addEventListener("click", () => popupLayer.popupRemove(v.vesselId));
+    if (showExpand) el.querySelector(".ship-popup-expand").addEventListener("click", () => expand(v));
+    return el;
+  };
+
+  /** @param {object} v  내 선박 팝업(상세 버튼·썸네일 포함) */
+  const openPopup = (v) => {
+    popupLayer.popupUpdate(v.vesselId, buildPopupEl(v, v), [v.longitude, v.latitude]);
+  };
+  /** @param {object} v  글로벌 선박 팝업(간소) */
+  const openPopupLocal = (v) => {
+    popupLayer.popupUpdate(v.vesselId, buildPopupEl(v, v, { showExpand: false, showThumb: false }), [v.longitude, v.latitude]);
+  };
+
+  /** @param {object} v  선택 토글(팝업 열기/닫기) */
+  const toggle = (v) => {
+    const id = v.vesselId;
+    if (checked[id]) {
+      checked[id] = false;
+      popupLayer.popupRemove(id);
+    } else {
+      checked[id] = true;
+      openPopup(v);
+    }
+  };
+
+  /** @param {string} id  내/글로벌 선박으로 flyTo */
+  const flyToVessel = (id) => {
+    const v = vesselById(id);
+    if (!v || v.longitude == null || v.latitude == null) return;
+    map.flyTo({ center: [v.longitude, v.latitude], zoom: Math.max(map.getZoom(), 5), duration: 800 });
+  };
+
+  // globe 모드 시 맵 컨테이너 뒤에 깔 우주 배경(HTML 기준 상대경로)과 사진작가 크레딧.
+  const GLOBE_BG = "img/nathan-anderson-KvgB81s4dF0-unsplash.jpg";
+  const GLOBE_BG_CREDIT = "https://unsplash.com/ko/@nathananderson";
+
+  /**
+   * 배경 사진작가 크레딧 링크를 맵 컨테이너 우측 하단에 단다(없을 때만 생성).
+   * @param {HTMLElement} container  맵 컨테이너
+   * @returns {HTMLElement}  크레딧 앵커 요소
+   */
+  const ensureGlobeCredit = (container) => {
+    let el = container.querySelector(".globe-credit");
+    if (!el) {
+      el = document.createElement("a");
+      el.className = "globe-credit";
+      el.href = GLOBE_BG_CREDIT;
+      el.target = "_blank";
+      el.rel = "noopener noreferrer";
+      el.textContent = "Photo: Nathan Anderson / Unsplash";
+      el.style.cssText =
+          "position:absolute;left:8px;bottom:8px;z-index:1;padding:3px 8px;" +
+          "border-radius:4px;background:rgba(0,0,0,0.45);color:rgba(255,255,255,0.85);" +
+          "font-size:11px;line-height:1.4;text-decoration:none;backdrop-filter:blur(2px);";
+      container.appendChild(el);
+    }
+    return el;
+  };
+
+  /** @param {boolean} enabled  지구본/평면 전환 */
+  const setGlobe = (enabled) => {
+    tooltipLayer.popupRemove("tooltip");
+    map.setProjection?.({ type: enabled ? "globe" : "mercator" });
+    const container = map.getContainer();
+    if (enabled) {
+      // 배경 이미지 위에 은은한 어두운 오버레이를 겹쳐 깐다(가독성·분위기).
+      container.style.background =
+          `linear-gradient(rgba(10,14,30,0.4), rgba(10,14,30,0.4)), url('${GLOBE_BG}') center/cover no-repeat`;
+      ensureGlobeCredit(container).style.display = "";
+      map.setSky?.({ "atmosphere-blend": 0.6 });
+      map.flyTo({ zoom: 2, duration: 1000 });
+    } else {
+      container.style.background = "";
+      const credit = container.querySelector(".globe-credit");
+      if (credit) credit.style.display = "none";
+      map.setSky?.({});
+    }
+  };
+
+  // ── 상세 모달 ─────────────────────────────────────────────
+  /** @param {object} v  상세 모달 열기 */
+  const expand = async (v) => {
+    const modal = document.getElementById("vessel-modal");
+    const fullVessel = vessels.value.find((x) => x.vesselId === v.vesselId) ?? v;
+    const fmt = (val, unit = "") => (val != null ? `${val}${unit}` : "—");
+    const fmtDeg = (val) => (val != null ? `${Number(val).toFixed(4)}°` : "—");
+    const closeSvg = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
+
+    const renderDialog = (lvi, media) => {
+      const d = lvi ?? {};
+      const rightContent =
+        lvi == null
+          ? `<div class="modal-loading">불러오는 중…</div>`
+          : `
+          <div class="modal-section">
+            <div class="modal-section-title">식별</div>
+            <div class="modal-row"><span class="lbl">MMSI</span><span class="val">${fmt(fullVessel.mmsi)}</span></div>
+            <div class="modal-row"><span class="lbl">IMO</span><span class="val">${fmt(fullVessel.imoNumber)}</span></div>
+          </div>
+          <div class="modal-section">
+            <div class="modal-section-title">위치 · 움직임</div>
+            <div class="modal-row"><span class="lbl">위도</span><span class="val">${fmtDeg(d.latitude)}</span></div>
+            <div class="modal-row"><span class="lbl">경도</span><span class="val">${fmtDeg(d.longitude)}</span></div>
+            <div class="modal-row"><span class="lbl">SOG</span><span class="val">${fmt(d.sog, " kn")}</span></div>
+            <div class="modal-row"><span class="lbl">COG</span><span class="val">${fmt(d.cog, "°")}</span></div>
+            <div class="modal-row"><span class="lbl">Heading</span><span class="val">${fmt(d.heading ?? fullVessel.heading, "°")}</span></div>
+          </div>`;
+      const imageContent =
+        media == null
+          ? `<div class="media-grid">${'<div class="media-placeholder"></div>'.repeat(4)}</div>`
+          : media.images.length
+          ? `<div class="media-grid">${media.images.map((src) => `<img class="media-img" src="${src}" loading="lazy">`).join("")}</div>`
+          : `<div class="media-empty">이미지가 없습니다</div>`;
+
+      modal.innerHTML = `
+        <div class="modal-dialog">
+          <div class="modal-dlg-header">
+            <span class="modal-title">${fullVessel.vesselName ?? v.vesselId}</span>
+            <button class="modal-close" title="닫기">${closeSvg}</button>
+          </div>
+          <div class="modal-dlg-body">
+            <div class="modal-left">
+              <div class="modal-tabs">
+                <button class="modal-tab active" data-tab="images">이미지</button>
+              </div>
+              <div class="modal-tab-panel active" data-tab="images">${imageContent}</div>
+            </div>
+            <div class="modal-right">${rightContent}</div>
+          </div>
+        </div>`;
+      modal.querySelector(".modal-close").addEventListener("click", () => modal.classList.remove("open"));
+      modal.querySelectorAll(".modal-tab").forEach((tab) => {
+        tab.addEventListener("click", () => {
+          modal.querySelectorAll(".modal-tab").forEach((t) => t.classList.remove("active"));
+          modal.querySelectorAll(".modal-tab-panel").forEach((p) => p.classList.remove("active"));
+          tab.classList.add("active");
+          modal.querySelector(`.modal-tab-panel[data-tab="${tab.dataset.tab}"]`).classList.add("active");
+        });
+      });
+    };
+
+    renderDialog(null, null);
+    modal.classList.add("open");
+    modal.addEventListener("click", (e) => { if (e.target === modal) modal.classList.remove("open"); }, { once: true });
+
+    const [lvi, media] = await Promise.all([api.getLvi(v.vesselId), getVesselMedia(fullVessel)]);
+    renderDialog(lvi?.data ?? {}, media);
+  };
+
+  // ── 과거항적 (createLineLayer) ───────────────────────────
+  /** @type {Map<string, Array<object>>} vesselId → 정렬된 항적 포인트(재생용) */
+  const pastPointsByVessel = new Map();
+
+  /**
+   * 과거항적 선을 그린다.
+   * @param {string} id @param {Array<object>} points @param {string} color
+   */
+  const drawPast = (id, points, color) => {
+    const sorted = [...points].sort((a, b) => {
+      const ta = a.posUtc ? new Date(a.posUtc).getTime() : 0;
+      const tb = b.posUtc ? new Date(b.posUtc).getTime() : 0;
+      return ta - tb;
+    });
+    pastPointsByVessel.set(id, sorted);
+    const coords = sorted
+      .filter((p) => p.longitude != null && p.latitude != null)
+      .map((p) => [p.longitude, p.latitude]);
+    lineLayer.lineAdd(id, { color, width: 2, opacity: 0.75 });
+    lineLayer.lineUpdate(id, coords);
+  };
+
+  /** @param {string} id  과거항적 선 제거 */
+  const clearPast = (id) => lineLayer.lineRemove(id);
+
+  // ── 항적 재생 (서비스 기능 → level2가 raw map으로 구현) ──
+  const PL_TRACK_SRC = "shi-player-track-src";
+  const PL_TRACK_LYR = "shi-player-track-lyr";
+  const PL_VESSEL_SRC = "shi-player-vessel-src";
+  const PL_VESSEL_LYR = "shi-player-vessel-lyr";
+  const PL_LABEL_LYR = "shi-player-label-lyr";
+  const PL_ICON = "shi-player-icon";
+  const PL_DURATION = 30_000;
+  const HEADING_DEAD_BAND = 10;
+
+  let playerAnimFrame = null;
+  let playerIdleHandler = null;
+  let playerVesselId = null;
+
+  const angleDiff = (a, b) => Math.abs(((b - a + 540) % 360) - 180);
+  const calcBearing = (p0, p1) => {
+    const dx = p1.longitude - p0.longitude;
+    const dy = p1.latitude - p0.latitude;
+    if (dx * dx + dy * dy < 1e-10) return null;
+    return (Math.atan2(dx, dy) * 180 / Math.PI + 360) % 360;
+  };
+
+  /** 재생을 중단하고 재생 레이어를 숨긴다. */
+  const stopTrack = () => {
+    if (playerAnimFrame) { cancelAnimationFrame(playerAnimFrame); playerAnimFrame = null; }
+    if (playerIdleHandler) { map.off("idle", playerIdleHandler); playerIdleHandler = null; }
+    [PL_TRACK_LYR, PL_VESSEL_LYR, PL_LABEL_LYR].forEach((id) => {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
+    });
+    playerVesselId = null;
+  };
+
+  /**
+   * 과거항적을 30초 동안 애니메이션으로 재생한다.
+   * @param {string} vesselId @param {() => void} [onEnd]
+   */
+  const playTrack = (vesselId, onEnd) => {
+    const points = pastPointsByVessel.get(vesselId);
+    if (!points || points.length < 2) return;
+    stopTrack();
+
+    if (!map.hasImage(PL_ICON)) {
+      const size = 30;
+      const canvas = document.createElement("canvas");
+      canvas.width = size; canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      ctx.beginPath();
+      ctx.moveTo(size / 2, 2);
+      ctx.lineTo(size - 4, size - 4);
+      ctx.lineTo(size / 2, size - 9);
+      ctx.lineTo(4, size - 4);
+      ctx.closePath();
+      ctx.fillStyle = "#3B82F6"; ctx.fill();
+      ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2; ctx.stroke();
+      map.addImage(PL_ICON, { width: size, height: size, data: ctx.getImageData(0, 0, size, size).data });
+    }
+
+    if (!map.getSource(PL_TRACK_SRC)) {
+      map.addSource(PL_TRACK_SRC, { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addLayer({
+        id: PL_TRACK_LYR, type: "line", source: PL_TRACK_SRC,
+        layout: { "line-cap": "round", "line-join": "round", visibility: "none" },
+        paint: { "line-color": "#3B82F6", "line-width": 2.5, "line-opacity": 0.85 },
+      });
+    }
+    if (!map.getSource(PL_VESSEL_SRC)) {
+      map.addSource(PL_VESSEL_SRC, {
+        type: "geojson",
+        data: { type: "Feature", properties: { bearing: 0, sog: "", posTime: "", latStr: "", lngStr: "" }, geometry: { type: "Point", coordinates: [0, 0] } },
+      });
+      map.addLayer({
+        id: PL_VESSEL_LYR, type: "symbol", source: PL_VESSEL_SRC,
+        layout: { "icon-image": PL_ICON, "icon-rotate": ["get", "bearing"], "icon-rotation-alignment": "map", "icon-allow-overlap": true, "icon-ignore-placement": true, visibility: "none" },
+      });
+      map.addLayer({
+        id: PL_LABEL_LYR, type: "symbol", source: PL_VESSEL_SRC,
+        layout: {
+          "text-field": ["concat", ["get", "sog"], " kn\n", ["get", "posTime"], "\n", ["get", "latStr"], "\n", ["get", "lngStr"]],
+          "text-font": ["Noto Sans Regular"], "text-size": 11, "text-offset": [0, 2.2], "text-anchor": "top",
+          "text-allow-overlap": true, "text-ignore-placement": true, visibility: "none",
+        },
+        paint: { "text-color": "#1a1a2e" },
+      });
+    }
+
+    const coordinates = points.map((p) => [p.longitude, p.latitude]);
+    map.getSource(PL_TRACK_SRC).setData({ type: "FeatureCollection", features: [{ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates } }] });
+    const lngs = coordinates.map((c) => c[0]);
+    const lats = coordinates.map((c) => c[1]);
+    map.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: 100, duration: 600 });
+
+    const times = points.map((p) => { const r = p.posUtc ?? p.updated; return r ? new Date(r).getTime() : 0; });
+    const totalRealMs = times[times.length - 1] - times[0];
+    playerVesselId = vesselId;
+    [PL_TRACK_LYR, PL_VESSEL_LYR, PL_LABEL_LYR].forEach((id) => { if (map.getLayer(id)) map.moveLayer(id); });
+
+    const startWall = { t: 0 };
+    let lastBearing = 0;
+    const pickBearing = (p0, p1) => {
+      const h = p0.heading ?? p0.hdg;
+      if (h != null && h !== 511) {
+        if (angleDiff(lastBearing, h) > HEADING_DEAD_BAND) lastBearing = h;
+      } else {
+        const c = p0.cog;
+        if (c != null && c !== 511) {
+          if (angleDiff(lastBearing, c) > HEADING_DEAD_BAND) lastBearing = c;
+        } else {
+          const raw = calcBearing(p0, p1);
+          if (raw !== null && angleDiff(lastBearing, raw) > HEADING_DEAD_BAND) lastBearing = raw;
+        }
+      }
+      return lastBearing;
+    };
+
+    const step = (now) => {
+      if (playerVesselId !== vesselId) return;
+      const elapsed = now - startWall.t;
+      const progress = Math.min(elapsed / PL_DURATION, 1);
+      let lng, lat, b, p0;
+      if (totalRealMs > 0) {
+        const target = times[0] + progress * totalRealMs;
+        let idx = 1;
+        while (idx < times.length - 1 && times[idx] < target) idx++;
+        p0 = points[idx - 1];
+        const p1 = points[idx];
+        const segLen = times[idx] - times[idx - 1];
+        const segProg = segLen > 0 ? (target - times[idx - 1]) / segLen : 0;
+        lng = p0.longitude + (p1.longitude - p0.longitude) * segProg;
+        lat = p0.latitude + (p1.latitude - p0.latitude) * segProg;
+        b = pickBearing(p0, p1);
+      } else {
+        const rawIdx = progress * (points.length - 1);
+        const i0 = Math.floor(rawIdx);
+        const i1 = Math.min(i0 + 1, points.length - 1);
+        p0 = points[i0];
+        const p1 = points[i1];
+        const sp = rawIdx - i0;
+        lng = p0.longitude + (p1.longitude - p0.longitude) * sp;
+        lat = p0.latitude + (p1.latitude - p0.latitude) * sp;
+        b = pickBearing(p0, p1);
+      }
+      const sog = p0?.sog != null ? String(p0.sog.toFixed(1)) : "—";
+      const posTime = p0?.posUtc ? p0.posUtc.slice(0, 16).replace("T", " ").replace(/-/g, "‑") : "";
+      const latStr = lat.toFixed(4) + "°N";
+      const lngStr = lng.toFixed(4) + "°E";
+      map.getSource(PL_VESSEL_SRC)?.setData({ type: "Feature", properties: { bearing: b, sog, posTime, latStr, lngStr }, geometry: { type: "Point", coordinates: [lng, lat] } });
+      if (map.getLayer(PL_VESSEL_LYR)) map.setLayoutProperty(PL_VESSEL_LYR, "visibility", "visible");
+      if (map.getLayer(PL_LABEL_LYR)) map.setLayoutProperty(PL_LABEL_LYR, "visibility", "visible");
+      if (progress < 1) {
+        playerAnimFrame = requestAnimationFrame(step);
+      } else {
+        [PL_TRACK_LYR, PL_VESSEL_LYR, PL_LABEL_LYR].forEach((id) => { if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none"); });
+        playerVesselId = null;
+        onEnd?.();
+      }
+    };
+
+    playerIdleHandler = () => {
+      playerIdleHandler = null;
+      if (map.getLayer(PL_TRACK_LYR)) map.setLayoutProperty(PL_TRACK_LYR, "visibility", "visible");
+      startWall.t = performance.now();
+      playerAnimFrame = requestAnimationFrame(step);
+    };
+    map.once("idle", playerIdleHandler);
+  };
+
+  // ── Vue 앱 ───────────────────────────────────────────────
+  createApp({
+    setup() {
+      const selectAllEl = ref(null);
+      const globeMode = ref(false);
+      const searchQuery = ref("");
+      const onGlobeToggle = () => setGlobe(globeMode.value);
+
+      const playingTrack = reactive({});
+      const togglePlay = (v) => {
+        const id = v.vesselId;
+        if (playingTrack[id]) {
+          stopTrack();
+          playingTrack[id] = false;
+        } else {
+          Object.keys(playingTrack).forEach((k) => (playingTrack[k] = false));
+          playTrack(id, () => (playingTrack[id] = false));
+          playingTrack[id] = true;
+        }
+      };
+
+      const activePastTrack = reactive({});
+      const loadingTrack = reactive({});
+      const fetchPastTrack = async (v, days) => {
+        const id = v.vesselId;
+        if (activePastTrack[id] === days) {
+          clearPast(id);
+          activePastTrack[id] = null;
+          return;
+        }
+        loadingTrack[id] = true;
+        try {
+          const endDate = new Date().toISOString();
+          const startDate = new Date(Date.now() - days * 86_400_000).toISOString();
+          const res = await api.getPastTrack(id, { startDate, endDate });
+          const positions = res?.data?.list ?? [];
+          if (!positions.length) return;
+          drawPast(id, positions, colorOf(v.vesselTypeCode));
+          activePastTrack[id] = days;
+        } finally {
+          loadingTrack[id] = false;
+        }
+      };
+
+      const filteredVessels = computed(() => {
+        const q = searchQuery.value.trim().toLowerCase();
+        if (!q) return vessels.value;
+        return vessels.value.filter(
+          (v) =>
+            v.vesselName?.toLowerCase().includes(q) ||
+            String(v.mmsi ?? "").includes(q) ||
+            String(v.imoNumber ?? "").includes(q)
+        );
+      });
+      const allChecked = computed(
+        () => filteredVessels.value.length > 0 && filteredVessels.value.every((v) => checked[v.vesselId])
+      );
+      const someChecked = computed(
+        () => filteredVessels.value.some((v) => checked[v.vesselId]) && !allChecked.value
+      );
+      watch(someChecked, (val) => { if (selectAllEl.value) selectAllEl.value.indeterminate = val; }, { flush: "post" });
+
+      const toggleAll = () => {
+        if (!allChecked.value) {
+          vessels.value.filter((v) => !checked[v.vesselId]).forEach((v) => {
+            checked[v.vesselId] = true;
+            openPopup(v);
+          });
+        } else {
+          vessels.value.forEach((v) => {
+            checked[v.vesselId] = false;
+            popupLayer.popupRemove(v.vesselId);
+          });
+        }
+      };
+
+      return {
+        vessels, checked, toggle, vesselIcon: vesselListIcon, selectAllEl, allChecked, toggleAll,
+        globeMode, onGlobeToggle, flyTo: flyToVessel, expand,
+        activePastTrack, loadingTrack, fetchPastTrack, playingTrack, togglePlay,
+        searchQuery, filteredVessels,
+      };
+    },
+    template: `
+      <div class="panel-header">
+        선박 목록 <span class="count">{{ filteredVessels.length }}</span>
+        <label class="globe-toggle">
+          <input type="checkbox" v-model="globeMode" @change="onGlobeToggle">
+          Globe
+        </label>
+      </div>
+      <div class="search-row">
+        <input v-model="searchQuery" type="text" placeholder="선박명 · IMO · MMSI 검색">
+      </div>
+      <div class="list-header">
+        <input type="checkbox" ref="selectAllEl" :checked="allChecked" @change="toggleAll" @click.stop>
+        <span class="vessel-icon-wrap"></span>
+        <span class="lh-name">선박명</span>
+      </div>
+      <div class="vessel-list">
+        <div
+          v-for="v in filteredVessels"
+          :key="v.vesselId"
+          class="vessel-row"
+          :class="{ active: checked[v.vesselId] }"
+          @click="toggle(v)"
+        >
+          <input type="checkbox" :checked="checked[v.vesselId]" @click.stop @change.stop="toggle(v)">
+          <span class="vessel-icon-wrap" v-html="vesselIcon(v.vesselTypeCode)"></span>
+          <div class="info">
+            <div class="name-line">
+              <div class="name">{{ v.vesselName }}</div>
+              <button class="locate-btn" @click.stop="flyTo(v.vesselId)" title="지도에서 찾기">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>
+                  <line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/>
+                  <line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/>
+                </svg>
+              </button>
+              <button class="expand-btn" @click.stop="expand(v)" title="상세 보기">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/>
+                  <line x1="21" y1="3" x2="14" y2="10"/><line x1="3" y1="21" x2="10" y2="14"/>
+                </svg>
+              </button>
+            </div>
+            <div class="id-line">
+              <div class="id-text"><div><span class="lbl">MMSI</span> {{ v.mmsi }}</div><div><span class="lbl">IMO</span> {{ v.imoNumber || '—' }}</div></div>
+              <div class="track-btns">
+                <button class="track-btn" :class="{ active: activePastTrack[v.vesselId] === 7  }" :disabled="loadingTrack[v.vesselId]" @click.stop="fetchPastTrack(v, 7)"><span v-if="loadingTrack[v.vesselId]" class="btn-spinner"></span><span v-else>7D</span></button>
+                <button class="track-btn" :class="{ active: activePastTrack[v.vesselId] === 14 }" :disabled="loadingTrack[v.vesselId]" @click.stop="fetchPastTrack(v, 14)"><span v-if="loadingTrack[v.vesselId]" class="btn-spinner"></span><span v-else>14D</span></button>
+                <button class="play-btn" :class="{ active: playingTrack[v.vesselId] }" :disabled="!activePastTrack[v.vesselId]" @click.stop="togglePlay(v)" title="항적 재생">{{ playingTrack[v.vesselId] ? '⏹' : '▶' }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `,
+  }).mount("#vessel-panel");
+
+  // ── 이벤트 배선 (host=map 컨테이너) ──────
+  // 내 선박: icon 레이어 / 글로벌 선박: circle 레이어
+  const showTooltip = (id, lngLatFallback) => {
+    const v = vesselById(id);
+    const coords = v && v.longitude != null ? [v.longitude, v.latitude] : lngLatFallback;
+    tooltipLayer.popupUpdate("tooltip", (v && v.vesselName) || "No information", coords);
+  };
+  const hideTooltip = () => tooltipLayer.popupRemove("tooltip");
+
+  mapEl.addEventListener("icon-click", (e) => {
+    const my = vessels.value.find((v) => v.vesselId === e.detail.id);
+    if (!my) return;
+    flyToVessel(e.detail.id);
+    toggle(my);
+  });
+  mapEl.addEventListener("icon-enter", (e) => showTooltip(e.detail.id, e.detail.lngLat));
+  mapEl.addEventListener("icon-leave", hideTooltip);
+
+  mapEl.addEventListener("circle-click", (e) => {
+    const g = globalVesselsMap.get(e.detail.id);
+    if (!g) return;
+    flyToVessel(g.vesselId);
+    if (checked[g.vesselId]) {
+      checked[g.vesselId] = false;
+      popupLayer.popupRemove(g.vesselId);
+    } else {
+      checked[g.vesselId] = true;
+      openPopupLocal(g);
+    }
+  });
+  mapEl.addEventListener("circle-enter", (e) => showTooltip(e.detail.id, e.detail.lngLat));
+  mapEl.addEventListener("circle-leave", hideTooltip);
+
+  // 팝업이 닫히면(X 버튼 등) 체크 해제. tooltip id는 무시.
+  mapEl.addEventListener("popup-close", (e) => {
+    const id = e.detail.id;
+    if (id && vesselById(id)) checked[id] = false;
+  });
+
+  // 빈 지도 클릭 시 열린 글로벌 선박 팝업 닫기 (아이콘 피처를 안 맞췄을 때만)
+  map.on("click", (e) => {
+    const feats = map.queryRenderedFeatures(e.point);
+    const hitVessel = feats.some((f) => f.properties && vesselById(f.properties.id));
+    if (hitVessel) return;
+    for (const [id] of globalVesselsMap) {
+      if (checked[id]) {
+        checked[id] = false;
+        popupLayer.popupRemove(id);
+      }
+    }
+  });
+
+  // ── 데이터 로드 ───────────────────────────────────────────
+  const [globalResult, myResult] = await Promise.allSettled([api.getGlobalVessels(), api.getMyVessels()]);
+  const globalVessels = globalResult.status === "fulfilled" ? globalResult.value?.filter((v) => v.vesselName) : [];
+  const myVessels = myResult.status === "fulfilled" ? myResult.value : [];
+
+  const myVesselIds = new Set(myVessels.map((v) => v.vesselId));
+  const uniqueGlobalVessels = (globalVessels ?? []).filter((v) => !myVesselIds.has(v.vesselId));
+  globalVesselsMap = new Map(uniqueGlobalVessels.map((v) => [v.vesselId, v]));
+  vessels.value = myVessels;
+
+  // 글로벌(원형 점, circle 레이어) 먼저, 내 선박(teardrop 아이콘)을 위에. 펄스는 내 선박만.
+  drawGlobalCircles(uniqueGlobalVessels);
+  await drawMyVessels(myVessels);
+  addPulses(myVessels);
+  syncPulses();
+})();
+</script>
+</body>
+</html>

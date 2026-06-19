@@ -84,7 +84,7 @@
 
 ## 버전 분리 전략 (파일 네이밍)
 
-파일 접두사 `ml5`의 **`5`는 대상 MapLibre 메이저 버전(5.x)** 을 뜻합니다. `ml5.js` · `ml5line.js` · `ml5icon.js` · `ml5content.js`는 **하나의 버전에 고정된 한 세트**입니다.
+파일 접두사 `ml5`의 **`5`는 대상 MapLibre 메이저 버전(5.x)** 을 뜻합니다. `ml5.js` · `ml5line.js` · `ml5icon.js` · `ml5circle.js` · `ml5content.js`는 **하나의 버전에 고정된 한 세트**입니다.
 
 - MapLibre가 6, 8로 올라가면 점·선·면을 다루는 함수도 그 버전에 맞춰 `ml6*`, `ml8*`처럼 **별도 세트로 병행 관리**합니다. 과거 사용자와 최신 사용자가 호환성 충돌 없이 각자 버전을 그대로 쓸 수 있게 하기 위함입니다.
 - **어떤 버전 세트를 로드할지는 level2(소비 측)가 결정**합니다. 한 번에 한 세트만 로드하는 것을 전제로 합니다.
@@ -99,10 +99,11 @@
 | `ml5.js` | `createMap(container, opts)` | MapLibre를 CDN에서 동적 로드(싱글턴)하고 지도를 초기화한다. 타일 프리셋(`dark`/`liberty`)·커스텀 스타일 URL 지원, 기본 중심 좌표 `128,35,5`(경도,위도,줌). |
 | `ml5line.js` | `createLineLayer(map)` | 선(LineString) 레이어. 색·두께·투명도는 data-driven 스타일로 처리하며, GeoJSON 소스 1개 + 레이어 1개로 여러 선을 관리한다. |
 | `ml5icon.js` | `createIconLayer(map, host?)` | 아이콘(symbol) 레이어. SVG 또는 이미지 URL을 등록해 표시하고, 클릭·호버를 커스텀 이벤트로 알린다. |
+| `ml5circle.js` | `createCircleLayer(map, host?)` | 원형 점(circle) 레이어. 색·반지름·투명도를 data-driven으로 처리해 다수의 단순 점을 가볍게 그린다(아이콘 대비 CPU 전처리가 적어 수천~수만 점에 적합). 클릭·호버를 커스텀 이벤트로 알린다. |
 | `ml5content.js` | `createPopupLayer(map, host?)` | 좌표에 앵커된 팝업 레이어. DOM 요소나 HTML 문자열을 띄우고 닫기 동작을 호출자에게 위임한다. |
-| `index.html` | — | 위 네 스크립트를 로드하고 전체 기능을 시연하는 예제 페이지. |
+| `index.html` | — | 위 스크립트를 로드하고 전체 기능을 시연하는 예제 페이지. |
 
-> 네 레이어 모두 `destroy()`를 제공해, 등록한 이벤트·레이어·소스를 한 번에 정리할 수 있습니다.
+> 위 레이어 모두 `destroy()`를 제공해, 등록한 이벤트·레이어·소스를 한 번에 정리할 수 있습니다.
 
 ---
 
@@ -140,6 +141,10 @@
 - `opts.center` — `'경도,위도,줌'` 문자열 (기본 `'128,35,5'`). 값이 비었거나 숫자가 아니면 각 항목이 기본값(경도 `128`, 위도 `35`, 줌 `5`)으로 대체된다.
 - `opts.tile` — 프리셋 키(`'dark'` | `'liberty'`) 또는 스타일 JSON URL (기본 `'liberty'`)
 
+> **데이터 출처 표기(attribution)는 항상 노출되며 끌 수 없다.** 타일 원천이 OpenStreetMap(ODbL)이라
+> 라이선스상 "© OpenStreetMap contributors" 표기가 필수다. 우측 하단에 접힌 ⓘ 버튼으로 표시되고,
+> 투영 방식(메르카토르/globe)과 무관하게 항상 보인다.
+
 > 타일·글리프·스프라이트 로드 실패 같은 **비치명적 오류**는 지도 생성을 막지 않고 콘솔 경고만 남긴다.
 > 스타일 문서 자체를 불러오지 못하는 **치명적 오류**일 때만 Promise가 reject된다.
 
@@ -160,7 +165,7 @@
 | --- | --- |
 | `iconImgAdd(iconId, code, opts?)` | 아이콘 이미지를 등록(async). `code`에 `<svg`가 있으면 SVG를 캔버스로 래스터라이즈하고, 그 외에는 이미지 URL로 간주해 `fetch`로 받는다. `opts.size` 기본 `32`(SVG·URL 모두 적용, DPR 자동 반영). |
 | `iconImgRemove(iconId)` | 등록한 이미지와 해당 아이콘의 모든 포인트 제거. |
-| `iconUpdate(iconId, entriesOrId, coords?)` | 아이콘 인스턴스 추가/갱신. 단건 `iconUpdate(id, 'pointId', [lng, lat])` 또는 배치 `iconUpdate(id, [['pointId', [lng, lat]], ...])`. 형식이 잘못된 좌표는 경고 후 무시한다(단건은 전체 무시, 배치는 해당 항목만 건너뜀). |
+| `iconUpdate(iconId, entriesOrId, coords?, opts?)` | 아이콘 인스턴스 추가/갱신. 단건 `iconUpdate(id, 'pointId', [lng, lat], { rotation })` 또는 배치 `iconUpdate(id, [['pointId', [lng, lat], { rotation }], ...])`. `rotation`(도, 시계방향, 지도 북쪽 기준, 기본 0)은 선택값 — 선수방향(heading) 같은 회전에 사용. 형식이 잘못된 좌표는 경고 후 무시한다(단건은 전체 무시, 배치는 해당 항목만 건너뜀). |
 | `iconRemove(iconId, pointIdOrIds?)` | 인스턴스 제거. ID 생략 시 해당 아이콘 전체 제거. |
 | `destroy()` | 이벤트 핸들러·레이어·소스 정리. |
 
@@ -172,6 +177,24 @@
 - `icon-click` — `detail: { icon, id, lngLat: [lng, lat] }`
 - `icon-enter` — `detail: { icon, id, lngLat: [lng, lat] }`
 - `icon-leave` — (detail 없음)
+
+### `createCircleLayer(map, host?) → { circleUpdate, circleRemove, destroy }`
+
+`host`는 커스텀 이벤트를 발신할 요소(기본: 지도 컨테이너). 색·반지름·투명도가 data-driven이라 점마다 색을 달리해도 이미지 등록이 필요 없어, 수천~수만 개의 단순 점을 가볍게 그릴 때 아이콘(symbol)보다 적합하다.
+
+| 메서드 | 설명 |
+| --- | --- |
+| `circleUpdate(idOrEntries, coords?, style?)` | 점 추가/갱신. 단건 `circleUpdate('id', [lng, lat], { color, radius, opacity })` 또는 배치 `circleUpdate([['id', [lng, lat], { color }], ...])`. `style = { color?, radius?, opacity? }` (기본 `#3B82F6` / `4` / `1`). 같은 `id`면 갱신(upsert). 형식이 잘못된 좌표는 경고 후 건너뜀. |
+| `circleRemove(idOrIds?)` | 점 제거. 생략 시 전체 제거, 문자열/배열로 단건·복수 제거. |
+| `destroy()` | 이벤트 핸들러·레이어·소스 정리. |
+
+> 클릭·호버 판정을 키우기 위해 표시용 원 위에 투명한 hit 레이어(반지름 + 6px)를 깔아, 작은 점도 쉽게 클릭·호버할 수 있다.
+
+발신 이벤트 (`host`에서 발생):
+
+- `circle-click` — `detail: { id, color, lngLat: [lng, lat] }`
+- `circle-enter` — `detail: { id, color, lngLat: [lng, lat] }`
+- `circle-leave` — (detail 없음)
 
 ### `createPopupLayer(map, host?) → { popupUpdate, popupRemove, destroy }`
 
@@ -191,6 +214,7 @@
 ## 참고 / 주의
 
 - **인터넷 연결 필요** — MapLibre 라이브러리(CDN)와 지도 타일(OpenFreeMap)을 네트워크에서 받습니다.
+- **데이터 출처 표기** — OSM/OpenFreeMap attribution이 우측 하단에 상시 노출됩니다(라이선스 준수, 끌 수 없음). 직접 만든 UI를 우측 하단에 둘 때는 겹치지 않게 주의하세요(예: 예제의 globe 사진 크레딧은 좌측 하단).
 - **좌표 순서** — 모든 좌표는 `[경도(lng), 위도(lat)]` 입니다.
 - **ID 기반 동작** — `*Add` / `*Update` 는 같은 ID로 다시 호출하면 덮어씁니다(upsert).
 - **정리** — 레이어를 더 이상 쓰지 않을 때는 각 레이어의 `destroy()`를 호출하세요. (icon 이미지는 위 설명대로 `iconImgRemove`로 별도 제거)
